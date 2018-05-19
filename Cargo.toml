@@ -1,0 +1,17 @@
+[package]
+name = "pgdbfs"
+version = "0.1.0"
+authors = ["riazmd"]
+
+[dependencies]
+fuse = "0.3"
+time = "0.1.39"
+libc = "0.2.36"
+rand = "0.4"
+lazy_static = "1.0"
+r2d2 = "0.8.2"
+r2d2_postgres = "0.14.0"
+
+[dependencies.postgres]
+version = "0.15"
+features = ["with-time"]
