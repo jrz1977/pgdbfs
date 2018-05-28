@@ -8,9 +8,9 @@ use std::ffi::OsStr;
 use std::mem;
 use std::os;
 
-use self::libc::{ENOENT, ENOSYS};
+use self::libc::{ENOENT, ENOSYS,EIO,ENOTEMPTY};
 use self::time::{Timespec, Tm};
-use self::fuse::{FileAttr, FileType, Filesystem, Request, ReplyAttr, ReplyEntry, ReplyDirectory, ReplyOpen, ReplyWrite};
+use self::fuse::{FileAttr, FileType, Filesystem, Request, ReplyAttr, ReplyEntry, ReplyEmpty, ReplyDirectory, ReplyOpen, ReplyWrite};
 
 use db;
 use db::{Ent, PgDbMgr};
@@ -83,7 +83,7 @@ impl Filesystem for PgDbFs {
         println!("** {} - readdir(ino={}, fh={}, offset={}, mnt_pt: {})", TAG, ino, fh, offset, self.mount_pt);
         let mut off = 0;
         if offset == 0 {
-            let entries:Vec<db::Ent> = self.db_mgr.ls(self.mount_pt.to_string(), ino as i64);            
+            let entries:Vec<db::Ent> = self.db_mgr.ls(&self.mount_pt, ino as i64);            
             reply.add(ino, off+1, FileType::Directory, &Path::new("."));
             reply.add(ino, off+1, FileType::Directory, &Path::new(".."));
             
@@ -193,6 +193,50 @@ impl Filesystem for PgDbFs {
                 reply.written(data.len() as u32);
             },
             _ => reply.error(ENOSYS)
+        }
+    }
+
+    fn unlink(&mut self, _req: &Request, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
+        println!("** {} - unlink(parent: {}, name: {:?})", TAG, _parent, _name);
+        let str = _name.to_str().unwrap();
+        match self.db_mgr.delete_file(&self.mount_pt, _parent as i64, &str) {
+            1 => {
+                println!("** {}, unlink success: {}, {:?}", TAG, _parent, _name);
+                reply.ok()
+            },
+            _ => reply.error(EIO)
+        }
+    }
+
+    fn rmdir(
+        &mut self, 
+        _req: &Request, 
+        _parent: u64, 
+        _name: &OsStr, 
+        reply: ReplyEmpty
+    ) {
+        println!("** {} - rmdir(parent: {}, name: {:?})", TAG, _parent, _name);
+        let str = _name.to_str().unwrap();
+        match self.db_mgr.lookup(&self.mount_pt, _parent as i64, &str) {
+            Some(ent) => {
+                let self_ino = ent.ino;
+                match self.db_mgr.num_children(&self.mount_pt, self_ino) {
+                    0 => {
+                        println!("Now remove directory: {}", str);
+                        match self.db_mgr.delete_file(&self.mount_pt, _parent as i64, &str) {
+                            1 => {
+                                reply.ok()
+                            }
+                            _ => reply.error(EIO)
+                        }
+                    }
+                    _ => {
+                        reply.error(ENOTEMPTY)
+                    }
+                }
+            },
+            None => {
+            }
         }
     }
 }

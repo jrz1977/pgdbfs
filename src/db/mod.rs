@@ -133,7 +133,7 @@ impl PgDbMgr {
         return None;
     }
     
-    pub fn ls(&mut self, mnt_pt: String, ino: i64) -> Vec<Ent> {
+    pub fn ls(&mut self, mnt_pt: &String, ino: i64) -> Vec<Ent> {
         let conn = self.connect();
         let mut v: Vec<Ent> = Vec::new();
         println!("** {} - ls: {}, {}", TAG, mnt_pt, ino);
@@ -164,5 +164,31 @@ impl PgDbMgr {
             }
         }
         return 0;    
+    }
+
+    pub fn delete_file(&mut self, mnt_pt: &String, parent: i64, name: &str) -> u64 {
+        let conn = self.connect();
+        let sql = "delete from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3";
+        match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
+            Result::Ok(val) => {
+                return val;
+            },
+            Result::Err(err) => {
+                eprintln!("Failed to delete_file for: {}, {} {}, reason: {}", mnt_pt, parent, name, err);
+                return 0;
+            }
+        }
+        return 0;            
+    }
+
+    pub fn num_children(&mut self, mnt_pt: &String, ino: i64) -> i64 {
+        let conn = self.connect();
+        println!("** {} - ls: {}, {}", TAG, mnt_pt, ino);
+        let mut count:i64 = 0;
+        for row in &conn.query("select count(*) from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
+            count = row.get(0);
+        }
+        println!("** {} - num_children found: {} entries", TAG, count);
+        return count;
     }    
 }
