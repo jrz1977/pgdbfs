@@ -3,7 +3,6 @@ extern crate libc;
 extern crate rand;
 extern crate time;
 
-use std::cell::Cell;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -11,18 +10,14 @@ use self::fuse::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request,
 };
-use self::libc::{ENOENT, ENOSYS};
-use self::libc::{O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
+use self::libc::ENOENT;
+use self::libc::{O_ACCMODE, O_APPEND, O_RDONLY, O_RDWR, O_WRONLY};
 use self::time::Timespec;
 
 use db;
 use db::PgDbMgr;
 
-mod memcache;
-
 use fcache;
-use fcache::FBuffer;
-use fcache::FCache;
 
 static TAG: &str = "fsys";
 
@@ -30,14 +25,11 @@ static TAG: &str = "fsys";
 pub struct PgDbFs {
     mount_pt: String,
     db_mgr: PgDbMgr,
-    cache_mgr: memcache::MemCache,
-    read_cache_mgr: memcache::MemCache,
     fcache: fcache::FCache,
 }
 
 pub trait DbFsUtils {
     fn make_file_entry(&self, ent: &db::Ent) -> FileAttr {
-        let ttl = Timespec::new(1, 0);
         let attr = FileAttr {
             ino: ent.ino as u64,
             size: ent.size as u64,
@@ -113,47 +105,47 @@ impl Filesystem for PgDbFs {
     fn setattr(
         &mut self,
         _req: &Request,
-        ino: u64,
-        mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
-        size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
-        fh: Option<u64>,
-        crtime: Option<Timespec>,
-        chgtime: Option<Timespec>,
-        bkuptime: Option<Timespec>,
-        flags: Option<u32>,
+        _ino: u64,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+        _size: Option<u64>,
+        _atime: Option<Timespec>,
+        _mtime: Option<Timespec>,
+        _fh: Option<u64>,
+        _crtime: Option<Timespec>,
+        _chgtime: Option<Timespec>,
+        _bkuptime: Option<Timespec>,
+        _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
         println!(
             "** {} - setattr (ino: {}, mode: {:?}, size: {:?}, at: {:?}, mt: {:?}",
-            TAG, ino, mode, size, atime, mtime
+            TAG, _ino, _mode, _size, _atime, _mtime
         );
         let cts: Timespec = time::now_utc().to_timespec();
-        let cr_tm = match atime {
+        let cr_tm = match _atime {
             Some(val) => val,
             _ => cts,
         };
-        let up_tm = match mtime {
+        let up_tm = match _mtime {
             Some(val) => val,
             _ => cts,
         };
-        let sz = match size {
+        let sz = match _size {
             Some(val) => val,
             _ => 0,
         };
         let updt_count = self
             .db_mgr
-            .setattr(&self.mount_pt, ino as i64, sz as i64, cr_tm, up_tm);
+            .setattr(&self.mount_pt, _ino as i64, sz as i64, cr_tm, up_tm);
 
         println!(
             "** {}, setattr(DB update count: {}, for: {}, {}",
-            TAG, updt_count, self.mount_pt, ino
+            TAG, updt_count, self.mount_pt, _ino
         );
 
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
+        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => panic!("Failed to lookup created dir"),
             Some(ent) => {
                 let attr = self.make_file_entry(&ent);
@@ -196,18 +188,25 @@ impl Filesystem for PgDbFs {
         }
     }
 
-    fn mkdir(&mut self, _req: &Request, parent: u64, name: &OsStr, mode: u32, reply: ReplyEntry) {
+    fn mkdir(
+        &mut self,
+        _req: &Request,
+        _parent: u64,
+        _name: &OsStr,
+        _mode: u32,
+        reply: ReplyEntry,
+    ) {
         println!(
             "** {} - mkdir(parent: {}, name: {:?}",
             TAG,
-            parent,
-            name.to_str()
+            _parent,
+            _name.to_str()
         );
         self.db_mgr
-            .mkdir(&self.mount_pt, parent as i64, &name.to_str().unwrap());
+            .mkdir(&self.mount_pt, _parent as i64, &_name.to_str().unwrap());
         match self
             .db_mgr
-            .lookup(&self.mount_pt, parent as i64, &name.to_str().unwrap())
+            .lookup(&self.mount_pt, _parent as i64, &_name.to_str().unwrap())
         {
             None => panic!("Failed to lookup created dir"),
             Some(ent) => {
@@ -218,50 +217,60 @@ impl Filesystem for PgDbFs {
         }
     }
 
-    fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
-        let ro: bool = flags as i32 & O_ACCMODE == O_RDONLY;
-        let rw: bool = flags as i32 & O_ACCMODE == O_RDWR;
-        let wo: bool = flags as i32 & O_ACCMODE == O_WRONLY;
-
-        println!(
-            "** {} - open(ino: {}, flags: {}, mode[ro,rw,wo]: [{}-{}-{}])",
-            TAG, ino, flags, ro, rw, wo
-        );
-
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
+    fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
+        println!("** {} - open(io: {}, flags: {})", TAG, _ino, _flags);
+        print_flags(&"open", _flags as i32);
+        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, ino);
+                println!("** {} - No entries found for ino: {}", TAG, _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
-                self.fcache
-                    .init(ent.id, flags, ent.segment_len, &mut self.db_mgr);
-                reply.opened(ino, flags)
+                let rw: bool = _flags as i32 & O_ACCMODE == O_RDWR;
+                let wo: bool = _flags as i32 & O_ACCMODE == O_WRONLY;
+                let ap: bool = _flags as i32 & O_APPEND == O_APPEND;
+
+                if (rw || wo) && !ap {
+                    println!(
+                        "** {} - open({}) - File opened for write, clearning data if exists",
+                        TAG, ent.id,
+                    );
+                    self.db_mgr.clear_file_data(&ent.id);
+                }
+                self.fcache.init(ent.id, _flags, ent.segment_len);
+                reply.opened(_ino, _flags)
             }
         }
         //        reply.opened(0, flags);
     }
 
-    fn read(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+    fn read(
+        &mut self,
+        _req: &Request,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _size: u32,
+        reply: ReplyData,
+    ) {
         println!(
             "** {} - read(ino = {}, fh = {}, offset = {}, size: {}, uid: {})",
             TAG,
-            ino,
-            fh,
-            offset,
-            size,
-            req.unique()
+            _ino,
+            _fh,
+            _offset,
+            _size,
+            _req.unique()
         );
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
+        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, ino);
+                println!("** {} - No entries found for ino: {}", TAG, _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
-                let file_id = ent.id;
                 let fb_opt = self.fcache.get(&ent.id);
-                match (fb_opt) {
-                    Some(fb) => match fb.read(offset, size as i32, &mut self.db_mgr) {
+                match fb_opt {
+                    Some(fb) => match fb.read(_offset, _size as i32, &mut self.db_mgr) {
                         Some(data) => reply.data(data.as_slice()),
                         None => reply.error(ENOENT),
                     },
@@ -271,64 +280,43 @@ impl Filesystem for PgDbFs {
         }
     }
 
-    // fn read(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
-    //     println!(
-    //         "** {} - read(ino = {}, fh = {}, offset = {}, size: {}, uid: {})",
-    //         TAG,
-    //         ino,
-    //         fh,
-    //         offset,
-    //         size,
-    //         req.unique()
-    //     );
-    //     match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
-    //         None => {
-    //             println!("** {} - No entries found for ino: {}", TAG, ino);
-    //             reply.error(ENOENT);
-    //         }
-    //         Some(ent) => match self.db_mgr.read(ent.id, offset, size) {
-    //             None => {
-    //                 return reply.error(ENOENT);
-    //             }
-    //             Some(data) => {
-    //                 return reply.data(data.as_slice());
-    //             }
-    //         },
-    //     }
-    // }
-
     fn write(
         &mut self,
         _req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        data: &[u8],
-        flags: u32,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _data: &[u8],
+        _flags: u32,
         reply: ReplyWrite,
     ) {
         println!(
             "** {} - write(ino: {}, offset: {}, data_len: {}, flags: {})",
             TAG,
-            ino,
-            offset,
-            data.len(),
-            flags
+            _ino,
+            _offset,
+            _data.len(),
+            _flags
         );
 
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
+        print_flags(&"write", _flags as i32);
+
+        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, ino);
+                println!("** {} - No entries found for ino: {}", TAG, _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
+                self.fcache.init(ent.id, _flags, ent.segment_len);
                 let fb_opt = self.fcache.get(&ent.id);
-                match (fb_opt) {
+                match fb_opt {
                     Some(fb) => {
-                        fb.add(data, &mut self.db_mgr);
-                        return reply.written(data.len() as u32);
+                        fb.add(_offset, _data, &mut self.db_mgr);
+                        return reply.written(_data.len() as u32);
                     }
-                    None => {}
+                    None => {
+                        println!("No sauce");
+                    }
                 }
             }
         }
@@ -360,36 +348,6 @@ impl Filesystem for PgDbFs {
             },
         }
     }
-
-    // fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, reply: ReplyEmpty) {
-    //     println!("** {} - fsync(ino: {})", TAG, _ino);
-
-    //     match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
-    //         None => {
-    //             println!("** {} - No entries found for ino: {}", TAG, _ino);
-    //             reply.error(ENOSYS);
-    //         }
-    //         Some(ent) => match self.cache_mgr.get(&ent.id) {
-    //             Some(c) => {
-    //                 let cached_data = &c.data.unwrap();
-    //                 let offset_st = c.offset_en - cached_data.len();
-    //                 println!(
-    //                     "Flushing file: {}, off: {} - {}",
-    //                     _ino, offset_st, c.offset_en
-    //                 );
-    //                 self.db_mgr.write(
-    //                     &self.mount_pt,
-    //                     _ino as i64,
-    //                     offset_st as i64,
-    //                     c.offset_en as i64,
-    //                     cached_data,
-    //                 );
-    //                 reply.ok()
-    //             }
-    //             None => reply.error(ENOSYS),
-    //         },
-    //     }
-    // }
 
     //
     fn readdir(
@@ -428,6 +386,18 @@ impl Filesystem for PgDbFs {
     }
 }
 
+pub fn print_flags(tag: &str, flags: i32) {
+    let ro: bool = flags as i32 & O_ACCMODE == O_RDONLY;
+    let rw: bool = flags as i32 & O_ACCMODE == O_RDWR;
+    let wo: bool = flags as i32 & O_ACCMODE == O_WRONLY;
+    let ap: bool = flags as i32 & O_APPEND == O_APPEND;
+
+    println!(
+        "** {} Flags: [value - ro-rw-wo-ap]:[{} - {}-{}-{}-{}]",
+        tag, flags, ro, rw, wo, ap
+    );
+}
+
 pub fn mount(path: String) {
     println!("** {}, Mounting pgdbfs on path: {}", TAG, path);
     let mountpt = Path::new(&path);
@@ -435,21 +405,19 @@ pub fn mount(path: String) {
     let mut db_mgr = PgDbMgr::new(String::from("localhost"));
     db_mgr.init();
 
-    let mut memcache = memcache::MemCache::new();
-
     let pgdbfs = PgDbFs {
         mount_pt: path.to_string(),
         db_mgr: db_mgr,
-        cache_mgr: memcache::MemCache::new(),
-        read_cache_mgr: memcache::MemCache::new(),
         fcache: fcache::FCache::new(),
     };
 
-    let d: [u8; 0] = [];
-
-    // memcache.put(9, &d);
-    // memcache.put(19, &d);
-
-    fuse::mount(pgdbfs, &mountpt, &[]);
-    println!("** {}, Mounting pgdbfs on path: {}", TAG, path);
+    let result = fuse::mount(pgdbfs, &mountpt, &[]);
+    match result {
+        Ok(_r) => {
+            println!("** {}, Mounting pgdbfs on path: {}", TAG, path);
+        }
+        Err(err) => {
+            panic!(err);
+        }
+    }
 }

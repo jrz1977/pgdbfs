@@ -1,4 +1,3 @@
-use db;
 use db::PgDbMgr;
 use std::cmp;
 use std::collections::HashMap;
@@ -73,9 +72,18 @@ impl FBuffer {
         }
     }
 
-    pub fn add(&mut self, data: &[u8], db: &mut PgDbMgr) -> i32 {
+    pub fn add(&mut self, offset: i64, data: &[u8], db: &mut PgDbMgr) -> i32 {
+        let segment_no_for_offset = self.get_segment_no(offset);
+        println!(
+            "** {} add(segment_no_for_offset: {} = {})",
+            TAG, offset, segment_no_for_offset
+        );
+        if db.check_segment_exists(&self.file_id, &segment_no_for_offset) {
+            self.get_or_load_segment(&segment_no_for_offset, db);
+        }
+
         if self.segments.is_empty() {
-            let seg = FSegment::new(self.file_id, 0, self.segment_len);
+            let seg = FSegment::new(self.file_id, segment_no_for_offset, self.segment_len);
             self.segments.push(seg);
         } else if self.segments.last().unwrap().len() == self.segment_len as usize {
             let seg_no = self.segments.last().unwrap().segment_no + 1;
@@ -83,10 +91,8 @@ impl FBuffer {
             self.segments.push(seg);
         }
 
-        let index = self.segments.len() - 1;
-
         let last_seg_space = cmp::min(
-            (self.segment_len as usize - self.segments.last().unwrap().len()),
+            self.segment_len as usize - self.segments.last().unwrap().len(),
             data.len(),
         );
 
@@ -105,11 +111,50 @@ impl FBuffer {
             self.segments.push(new_seg);
         }
         self.trim_segments(db);
+
+        println!("added data: {}", self.file_id);
         return 0;
     }
 
+    // pub fn add(&mut self, data: &[u8], db: &mut PgDbMgr) -> i32 {
+    //     if self.segments.is_empty() {
+    //         let seg = FSegment::new(self.file_id, 0, self.segment_len);
+    //         self.segments.push(seg);
+    //     } else if self.segments.last().unwrap().len() == self.segment_len as usize {
+    //         let seg_no = self.segments.last().unwrap().segment_no + 1;
+    //         let seg = FSegment::new(self.file_id, seg_no, self.segment_len);
+    //         self.segments.push(seg);
+    //     }
+
+    //     let index = self.segments.len() - 1;
+
+    //     let last_seg_space = cmp::min(
+    //         (self.segment_len as usize - self.segments.last().unwrap().len()),
+    //         data.len(),
+    //     );
+
+    //     self.segments
+    //         .last_mut()
+    //         .unwrap()
+    //         .data
+    //         .extend(data[0..last_seg_space].iter().copied());
+
+    //     let rem = &data[last_seg_space..];
+    //     let iter = rem.chunks(self.segment_len as usize);
+    //     for chunk in iter {
+    //         let seg_no = self.segments.last().unwrap().segment_no + 1;
+    //         let mut new_seg = FSegment::new(self.file_id, seg_no, self.segment_len);
+    //         new_seg.data.extend(chunk.to_vec());
+    //         self.segments.push(new_seg);
+    //     }
+    //     self.trim_segments(db);
+
+    //     println!("added data: {}", self.file_id);
+    //     return 0;
+    // }
+
     pub fn trim_segments(&mut self, db: &mut PgDbMgr) {
-        if (self.segments.len() > 3) {
+        if self.segments.len() > 3 {
             let end = self.segments.len() - 2;
             let tsegments: Vec<_> = self.segments.drain(0..end).collect();
             for s in tsegments {
@@ -249,7 +294,7 @@ impl FCache {
         self.fcache.remove(id)
     }
 
-    pub fn init(&mut self, id: i64, flags: u32, segment_len: i32, db: &mut PgDbMgr) {
+    pub fn init(&mut self, id: i64, flags: u32, segment_len: i32) {
         // self.fcache
         //     .entry(id)
         //     .or_insert_with(|| FBuffer::new(id, DEFAULT_BUFFER_SZ, flags));

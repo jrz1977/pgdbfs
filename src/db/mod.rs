@@ -15,7 +15,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use self::chrono::{DateTime, Utc};
 
-use std::cmp;
 use std::vec::Vec;
 
 use fcache;
@@ -36,12 +35,6 @@ pub struct Ent {
 pub struct EntData {
     pub ino: i64,
     pub data: Vec<u8>,
-}
-
-struct FsData {
-    offset_st: i64,
-    offset_en: i64,
-    data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -71,8 +64,6 @@ impl PgDbMgr {
     }
 
     pub fn init(&mut self) {
-        let s = self.db_url.clone();
-
         let host = format!(
             "host = {} user = {} password = {} dbname = {}",
             self.db_url, "pgdbfs", "pgdbfs", "pgdbfs"
@@ -175,7 +166,7 @@ impl PgDbMgr {
                 };
                 Some(e)
             }
-            Err(err) => None,
+            Err(_err) => None,
         }
     }
 
@@ -202,7 +193,7 @@ impl PgDbMgr {
                 };
                 Some(e)
             }
-            Err(err) => None,
+            Err(_err) => None,
         }
     }
 
@@ -230,55 +221,55 @@ impl PgDbMgr {
         v
     }
 
-    pub fn read(&mut self, id: i64, offset: i64, size: u32) -> Option<Vec<u8>> {
-        let mut conn = self.connect();
+    // pub fn read(&mut self, id: i64, offset: i64, size: u32) -> Option<Vec<u8>> {
+    //     let mut conn = self.connect();
 
-        //let offset_end = offset + size as i64;
-        let offset_end = offset;
+    //     //let offset_end = offset + size as i64;
+    //     let offset_end = offset;
 
-        let sql = "select file_offset_st, file_offset_en, data from pgdbfs_data where fsid=$1 and $2 between file_offset_st and file_offset_en order by file_offset_st";
+    //     let sql = "select file_offset_st, file_offset_en, data from pgdbfs_data where fsid=$1 and $2 between file_offset_st and file_offset_en order by file_offset_st";
 
-        println!(
-            "** {} - read (id: {}, offset_st: {}, offset_en: {}, {})",
-            TAG, id, offset, offset_end, sql
-        );
+    //     println!(
+    //         "** {} - read (id: {}, offset_st: {}, offset_en: {}, {})",
+    //         TAG, id, offset, offset_end, sql
+    //     );
 
-        let mut fs_data: Vec<u8> = Vec::new();
+    //     let mut fs_data: Vec<u8> = Vec::new();
 
-        let mut row_offset_min: i64 = i64::MAX;
-        let mut row_offset_max: i64 = i64::MIN;
-        for row in &conn.query(sql, &[&id, &offset_end]).unwrap() {
-            let d: Vec<u8> = row.get(2);
-            let o: i64 = row.get(0);
-            let e: i64 = row.get(1);
-            row_offset_min = cmp::min(row_offset_min, o);
-            println!("??? {} {} {}", o, e, row_offset_min);
-            fs_data.extend(d.iter().copied());
-        }
+    //     let mut row_offset_min: i64 = i64::MAX;
+    //     let mut row_offset_max: i64 = i64::MIN;
+    //     for row in &conn.query(sql, &[&id, &offset_end]).unwrap() {
+    //         let d: Vec<u8> = row.get(2);
+    //         let o: i64 = row.get(0);
+    //         let e: i64 = row.get(1);
+    //         row_offset_min = cmp::min(row_offset_min, o);
+    //         println!("??? {} {} {}", o, e, row_offset_min);
+    //         fs_data.extend(d.iter().copied());
+    //     }
 
-        if (fs_data.len() == 0) {
-            Some(fs_data)
-        } else {
-            let slice_st = (offset - row_offset_min) as usize;
-            let mut slice_en = (slice_st + size as usize) as usize;
-            if slice_en > fs_data.len() {
-                slice_en = fs_data.len();
-            }
-            println!(
-                "** {} read - initial_offset: {}, total_fs_len: {} slice_st: {} slice_en: {}",
-                TAG,
-                offset,
-                fs_data.len(),
-                slice_st,
-                slice_en
-            );
-            Some(
-                fs_data
-                    .drain(slice_st as usize..slice_en as usize)
-                    .collect(),
-            )
-        }
-    }
+    //     if fs_data.len() == 0 {
+    //         Some(fs_data)
+    //     } else {
+    //         let slice_st = (offset - row_offset_min) as usize;
+    //         let mut slice_en = (slice_st + size as usize) as usize;
+    //         if slice_en > fs_data.len() {
+    //             slice_en = fs_data.len();
+    //         }
+    //         println!(
+    //             "** {} read - initial_offset: {}, total_fs_len: {} slice_st: {} slice_en: {}",
+    //             TAG,
+    //             offset,
+    //             fs_data.len(),
+    //             slice_st,
+    //             slice_en
+    //         );
+    //         Some(
+    //             fs_data
+    //                 .drain(slice_st as usize..slice_en as usize)
+    //                 .collect(),
+    //         )
+    //     }
+    // }
 
     pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
         let mut conn = self.connect();
@@ -293,7 +284,7 @@ impl PgDbMgr {
                 println!("Row found...");
                 Some(row.get("data"))
             }
-            Err(err) => {
+            Err(_err) => {
                 println!("No row found...");
                 None
             }
@@ -304,7 +295,7 @@ impl PgDbMgr {
         let mut conn = self.connect();
 
         let sql = "insert into pgdbfs_data (id, fsid, segment_no, data) values
-                           ( (select nextval('fsid_seq')), $1, $2, $3)";
+                           ( (select nextval('fsid_seq')), $1, $2, $3) on conflict on constraint pgdbfs_data_uk do update set data=$3";
 
         //let seg_no = *segment_no as i32;
         match conn.execute(sql, &[&file_id, &segment_no, &data]) {
@@ -319,14 +310,45 @@ impl PgDbMgr {
         }
     }
 
+    pub fn check_segment_exists(&mut self, file_id: &i64, segment_no: &i64) -> bool {
+        let mut conn = self.connect();
+        let sql = "select count(*)::int as cnt from pgdbfs_data where fsid=$1 and segment_no=$2";
+
+        println!(
+            "** TAG check_segment_exists(file_id: {}, segment_no: {}, sql: {})",
+            file_id, segment_no, sql
+        );
+        let row_data = conn.query_one(sql, &[file_id, segment_no]);
+        match row_data {
+            Ok(row) => {
+                let count: i32 = row.get("cnt");
+                if count == 0 {
+                    return false;
+                }
+                true
+            }
+            Err(_err) => false,
+        }
+    }
+
+    pub fn clear_file_data(&mut self, file_id: &i64) -> bool {
+        let mut conn = self.connect();
+        let sql = "delete from pgdbfs_data where fsid=$1";
+        println!("** {} - clear_data_for_file(file_id: {})", TAG, file_id);
+        match conn.execute(sql, &[file_id]) {
+            Result::Ok(_val) => true,
+            Result::Err(_err) => false,
+        }
+    }
+
     fn update_file_sz(&mut self, id: &i64, fsize: i64) -> bool {
         let mut conn = self.connect();
 
         let sql = "update pgdbfs set size=size + $1 where id=$2";
 
         match conn.execute(sql, &[&fsize, &id]) {
-            Result::Ok(val) => true,
-            Result::Err(err) => false,
+            Result::Ok(_val) => true,
+            Result::Err(_err) => false,
         }
     }
 }

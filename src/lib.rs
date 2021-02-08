@@ -2,7 +2,6 @@ pub mod db;
 pub mod fcache;
 pub mod fsys;
 
-#[macro_use]
 extern crate lazy_static;
 
 #[cfg(test)]

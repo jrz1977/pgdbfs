@@ -2,8 +2,6 @@ pub mod db;
 pub mod fcache;
 pub mod fsys;
 
-use db::PgDbMgr;
-
 fn main() {
     println!("Hello, world!");
 

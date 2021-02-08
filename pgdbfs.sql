@@ -21,7 +21,8 @@ create table pgdbfs_data (
        fsid bigint not null,
        segment_no bigint not null,
        data bytea not null,
-       constraint pgdbfs_data_fk foreign key(fsid) references pgdbfs(id) on delete cascade
+       constraint pgdbfs_data_fk foreign key(fsid) references pgdbfs(id) on delete cascade,
+       constraint pgdbfs_data_uk unique (fsid, segment_no)
 );
 
 create index mnt_pt_idx on pgdbfs(mnt_pt);
