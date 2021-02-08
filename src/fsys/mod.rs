@@ -3,6 +3,7 @@ extern crate libc;
 extern crate rand;
 extern crate time;
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -11,12 +12,17 @@ use self::fuse::{
     ReplyOpen, ReplyWrite, Request,
 };
 use self::libc::{ENOENT, ENOSYS};
+use self::libc::{O_ACCMODE, O_RDONLY, O_RDWR, O_WRONLY};
 use self::time::Timespec;
 
 use db;
 use db::PgDbMgr;
 
 mod memcache;
+
+use fcache;
+use fcache::FBuffer;
+use fcache::FCache;
 
 static TAG: &str = "fsys";
 
@@ -26,6 +32,7 @@ pub struct PgDbFs {
     db_mgr: PgDbMgr,
     cache_mgr: memcache::MemCache,
     read_cache_mgr: memcache::MemCache,
+    fcache: fcache::FCache,
 }
 
 pub trait DbFsUtils {
@@ -212,14 +219,25 @@ impl Filesystem for PgDbFs {
     }
 
     fn open(&mut self, _req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
-        println!("** {} - open(ino: {}, flags: {})", TAG, ino, flags);
+        let ro: bool = flags as i32 & O_ACCMODE == O_RDONLY;
+        let rw: bool = flags as i32 & O_ACCMODE == O_RDWR;
+        let wo: bool = flags as i32 & O_ACCMODE == O_WRONLY;
+
+        println!(
+            "** {} - open(ino: {}, flags: {}, mode[ro,rw,wo]: [{}-{}-{}])",
+            TAG, ino, flags, ro, rw, wo
+        );
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
             None => {
                 println!("** {} - No entries found for ino: {}", TAG, ino);
                 reply.error(ENOENT);
             }
-            Some(ent) => reply.opened(ino, flags),
+            Some(ent) => {
+                self.fcache
+                    .init(ent.id, flags, ent.segment_len, &mut self.db_mgr);
+                reply.opened(ino, flags)
+            }
         }
         //        reply.opened(0, flags);
     }
@@ -239,14 +257,17 @@ impl Filesystem for PgDbFs {
                 println!("** {} - No entries found for ino: {}", TAG, ino);
                 reply.error(ENOENT);
             }
-            Some(ent) => match self.db_mgr.read(ent.id, offset, size) {
-                None => {
-                    return reply.error(ENOENT);
+            Some(ent) => {
+                let file_id = ent.id;
+                let fb_opt = self.fcache.get(&ent.id);
+                match (fb_opt) {
+                    Some(fb) => match fb.read(offset, size as i32, &mut self.db_mgr) {
+                        Some(data) => reply.data(data.as_slice()),
+                        None => reply.error(ENOENT),
+                    },
+                    None => reply.error(ENOENT),
                 }
-                Some(data) => {
-                    return reply.data(data.as_slice());
-                }
-            },
+            }
         }
     }
 
@@ -301,31 +322,14 @@ impl Filesystem for PgDbFs {
                 reply.error(ENOENT);
             }
             Some(ent) => {
-                let ws: memcache::MemCachePutReply = self.cache_mgr.put(&ent.id, data);
-                println!(
-                    "** {} WriteStatus - {}, offset: {}, len: {}",
-                    TAG,
-                    ws,
-                    offset,
-                    data.len(),
-                );
-                match ws.write_status {
-                    memcache::WriteStatus::Unknown => reply.error(ENOENT),
-                    memcache::WriteStatus::Buffered => reply.written(data.len() as u32),
-                    memcache::WriteStatus::BufferFilled => {
-                        let cached_data = &ws.data.unwrap();
-                        let offset_st = ws.offset_en - cached_data.len();
-                        self.db_mgr.write(
-                            &self.mount_pt,
-                            ino as i64,
-                            offset_st as i64,
-                            ws.offset_en as i64,
-                            cached_data,
-                        );
+                let fb_opt = self.fcache.get(&ent.id);
+                match (fb_opt) {
+                    Some(fb) => {
+                        fb.add(data, &mut self.db_mgr);
                         return reply.written(data.len() as u32);
                     }
+                    None => {}
                 }
-                //return reply.written(data.len() as u32);
             }
         }
     }
@@ -344,21 +348,12 @@ impl Filesystem for PgDbFs {
                 println!("** {} - No entries found for ino: {}", TAG, _ino);
                 reply.error(ENOENT);
             }
-            Some(ent) => match self.cache_mgr.remove(&ent.id) {
-                Some(c) => {
-                    let cached_data = &c.data.unwrap();
-                    let offset_st = c.offset_en - cached_data.len();
-                    println!(
-                        "Flushing file: {}, off: {} - {}",
-                        _ino, offset_st, c.offset_en
-                    );
-                    self.db_mgr.write(
-                        &self.mount_pt,
-                        _ino as i64,
-                        offset_st as i64,
-                        c.offset_en as i64,
-                        cached_data,
-                    );
+            Some(ent) => match self.fcache.remove(&ent.id) {
+                Some(mut fb) => {
+                    let flags_t: i32 = fb.flags as i32;
+                    if flags_t & O_ACCMODE == O_RDWR || flags_t & O_ACCMODE == O_WRONLY {
+                        fb.save(&mut self.db_mgr);
+                    }
                     reply.ok()
                 }
                 None => reply.ok(),
@@ -447,6 +442,7 @@ pub fn mount(path: String) {
         db_mgr: db_mgr,
         cache_mgr: memcache::MemCache::new(),
         read_cache_mgr: memcache::MemCache::new(),
+        fcache: fcache::FCache::new(),
     };
 
     let d: [u8; 0] = [];

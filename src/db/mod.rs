@@ -18,6 +18,8 @@ use self::chrono::{DateTime, Utc};
 use std::cmp;
 use std::vec::Vec;
 
+use fcache;
+
 static TAG: &str = "db";
 
 pub struct Ent {
@@ -26,6 +28,7 @@ pub struct Ent {
     pub is_dir: bool,
     pub ino: i64,
     pub size: i64,
+    pub segment_len: i32,
     pub create_ts: DateTime<Utc>,
     pub update_ts: DateTime<Utc>,
 }
@@ -106,9 +109,9 @@ impl PgDbMgr {
     }
 
     pub fn mkfile(&mut self, mnt_pt: &String, parent: i64, name: &str) {
-        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 0, false)";
+        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, segment_len, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 0, $4, false)";
         let mut conn = self.connect();
-        match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
+        match conn.execute(sql, &[&mnt_pt, &parent, &name, &fcache::DEFAULT_BUFFER_SZ]) {
             Result::Ok(val) => {
                 println!("$$$ {:?}", val)
             }
@@ -153,7 +156,7 @@ impl PgDbMgr {
     ///
     pub fn lookup(&mut self, mnt_pt: &String, ino: i64, name: &str) -> Option<Ent> {
         let mut conn = self.connect();
-        let row_data = conn.query_one("select id, ino, name, is_dir, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3",
+        let row_data = conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3",
                                &[&mnt_pt, &ino, &name]);
 
         match row_data {
@@ -166,6 +169,7 @@ impl PgDbMgr {
                     name: row.get(2),
                     is_dir: row.get(3),
                     size: row.get(4),
+                    segment_len: row.get(5),
                     create_ts: c,
                     update_ts: u,
                 };
@@ -179,7 +183,7 @@ impl PgDbMgr {
     ///
     pub fn lookup_by_ino(&mut self, mnt_pt: &String, ino: i64) -> Option<Ent> {
         let mut conn = self.connect();
-        let row_data = &conn.query_one("select id, ino, name, is_dir, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and ino=$2",
+        let row_data = &conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and ino=$2",
                                &[&mnt_pt, &ino]);
 
         match row_data {
@@ -192,6 +196,7 @@ impl PgDbMgr {
                     name: row.get(2),
                     is_dir: row.get(3),
                     size: row.get(4),
+                    segment_len: row.get(5),
                     create_ts: c,
                     update_ts: u,
                 };
@@ -205,7 +210,7 @@ impl PgDbMgr {
         let mut conn = self.connect();
         let mut v: Vec<Ent> = Vec::new();
         println!("** {} - ls: {}, {}", TAG, mnt_pt, ino);
-        for row in &conn.query("select id, name, is_dir, ino, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
+        for row in &conn.query("select id, name, is_dir, ino, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
 
             let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
             let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
@@ -215,6 +220,7 @@ impl PgDbMgr {
                 is_dir: row.get(2),
                 ino: row.get(3),
                 size: row.get(4),
+                segment_len: row.get(5),
                 create_ts: c,
                 update_ts: u,
             };
@@ -274,51 +280,50 @@ impl PgDbMgr {
         }
     }
 
-    pub fn write(
-        &mut self,
-        mnt_pt: &String,
-        ino: i64,
-        offset_st: i64,
-        offset_en: i64,
-        data: &Vec<u8>,
-    ) -> u64 {
+    pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
         let mut conn = self.connect();
-
-        match self.lookup_by_ino(mnt_pt, ino) {
-            None => {
-                println!("** {} - No entries found for ino: {}", TAG, ino);
-                0
+        let sql = "select data from pgdbfs_data where fsid=$1 and segment_no=$2";
+        println!(
+            "** TAG load_segment(file_id: {}, segment_no: {}, sql: {})",
+            file_id, segment_no, sql
+        );
+        let row_data = conn.query_one(sql, &[file_id, segment_no]);
+        match row_data {
+            Ok(row) => {
+                println!("Row found...");
+                Some(row.get("data"))
             }
-            Some(ent) => {
-                let sql = "insert into pgdbfs_data (id, fsid, file_offset_st, file_offset_en, data) values
-                           ( (select nextval('fsid_seq')), $1, $2, $3, $4)";
-                println!(
-                    "Inserting data for fsid: {}, offset: {}, offset_en: {}, len: {}",
-                    ent.id,
-                    offset_st,
-                    offset_en,
-                    data.len()
-                );
-                match conn.execute(sql, &[&ent.id, &offset_st, &offset_en, &data]) {
-                    Result::Ok(val) => {
-                        self.update_file_sz(ent.id, offset_en);
-                        val
-                    }
-                    Result::Err(err) => {
-                        eprintln!("Failed to write for: {}, {}, reason: {}", mnt_pt, ino, err);
-                        0
-                    }
-                }
+            Err(err) => {
+                println!("No row found...");
+                None
             }
         }
-        //return 0;
     }
 
-    fn update_file_sz(&mut self, id: i64, fsize: i64) -> bool {
+    pub fn writep(&mut self, file_id: &i64, segment_no: &i64, data: &Vec<u8>) -> u64 {
         let mut conn = self.connect();
 
-        let sql = "update pgdbfs set size=$1 where id=$2";
-        println!("Updating file size for fsid: {}, fsize: {}", id, fsize);
+        let sql = "insert into pgdbfs_data (id, fsid, segment_no, data) values
+                           ( (select nextval('fsid_seq')), $1, $2, $3)";
+
+        //let seg_no = *segment_no as i32;
+        match conn.execute(sql, &[&file_id, &segment_no, &data]) {
+            Result::Ok(val) => {
+                self.update_file_sz(file_id, data.len() as i64);
+                val
+            }
+            Result::Err(err) => {
+                eprintln!("Failed to write for file_id: {}, reason: {}", file_id, err);
+                0
+            }
+        }
+    }
+
+    fn update_file_sz(&mut self, id: &i64, fsize: i64) -> bool {
+        let mut conn = self.connect();
+
+        let sql = "update pgdbfs set size=size + $1 where id=$2";
+
         match conn.execute(sql, &[&fsize, &id]) {
             Result::Ok(val) => true,
             Result::Err(err) => false,
