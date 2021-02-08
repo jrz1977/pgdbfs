@@ -1,6 +1,7 @@
 pub mod db;
+pub mod fcache;
 pub mod fsys;
-#[macro_use]
+
 extern crate lazy_static;
 
 #[cfg(test)]
@@ -9,7 +10,7 @@ mod tests {
     use db::Ent;
     use fsys;
     use std::fs;
-    
+
     // #[test]
     // fn test_db_conn() {
     //     let entries:Vec<db::Ent> = db::ls("/tmp/pgdbfs".to_string(), 1);
@@ -21,6 +22,6 @@ mod tests {
     #[test]
     fn test_fs() {
         let path = String::from("/tmp/pgdbfs");
-        fsys::mount(path);        
+        fsys::mount(path);
     }
 }

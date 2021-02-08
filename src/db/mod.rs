@@ -1,168 +1,354 @@
+extern crate chrono;
+//extern crate postgres;
 extern crate postgres;
-extern crate time;
 extern crate r2d2;
 extern crate r2d2_postgres;
+extern crate time;
 
-use self::postgres::{Connection};
-use self::time::{Timespec,Tm};
+use self::r2d2::PooledConnection;
+
+use self::r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
+
+use self::time::Timespec;
+
+use std::time::{Duration, UNIX_EPOCH};
+
+use self::chrono::{DateTime, Utc};
+
 use std::vec::Vec;
-use self::r2d2::{Pool, PooledConnection};
-use self::r2d2_postgres::{TlsMode, PostgresConnectionManager};
+
+use fcache;
 
 static TAG: &str = "db";
 
 pub struct Ent {
+    pub id: i64,
     pub name: String,
     pub is_dir: bool,
     pub ino: i64,
     pub size: i64,
-    pub create_ts: Timespec,
-    pub update_ts: Timespec
+    pub segment_len: i32,
+    pub create_ts: DateTime<Utc>,
+    pub update_ts: DateTime<Utc>,
+}
+
+pub struct EntData {
+    pub ino: i64,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug)]
 pub struct PgDbMgr {
     db_url: String,
-    pool: Option<r2d2::Pool<PostgresConnectionManager>>,
+    pool: Option<r2d2::Pool<PostgresConnectionManager<NoTls>>>,
 }
 
-pub fn make_a_pool(db_url: String) -> r2d2::Pool<PostgresConnectionManager> {
-    let m = PostgresConnectionManager::new(db_url, TlsMode::None).unwrap();
+pub fn make_a_pool(db_url: String) -> r2d2::Pool<PostgresConnectionManager<NoTls>> {
+    //    let m = PostgresConnectionManager::new(db_url, TlsMode::None).unwrap();
+    let host = format!(
+        "host = {} user = {} dbname = {}",
+        db_url, "pgdbfs", "pgdbfs"
+    );
+    let m = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
+
     let p = r2d2::Pool::new(m).unwrap();
     return p;
 }
 
 impl PgDbMgr {
-    pub fn new(db_url: String) -> PgDbMgr {
+    pub fn new(url: String) -> PgDbMgr {
         PgDbMgr {
-            db_url: db_url,
+            db_url: url,
             pool: None,
         }
     }
 
     pub fn init(&mut self) {
-        let s = self.db_url.clone();
-        let cm = PostgresConnectionManager::new(s, TlsMode::None).unwrap();  
+        let host = format!(
+            "host = {} user = {} password = {} dbname = {}",
+            self.db_url, "pgdbfs", "pgdbfs", "pgdbfs"
+        );
+        let cm = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
+        println!("Connecting to : {}", host);
+        //        let cm = PostgresConnectionManager::new(s, NoTls).unwrap();
         self.pool = Some(r2d2::Pool::new(cm).unwrap());
     }
-    
-    fn connect(&self) -> PooledConnection<PostgresConnectionManager> {
+
+    fn connect(&self) -> PooledConnection<PostgresConnectionManager<NoTls>> {
         match self.pool.as_ref() {
-            None => { panic!("PgDbMgr not initialized, call init first") },
+            None => {
+                panic!("PgDbMgr not initialized, call init first")
+            }
             Some(p) => {
                 let conn = p.get().unwrap();
-                return conn;                
+                return conn;
             }
         };
     }
 
     pub fn mkdir(&mut self, mnt_pt: &String, parent: i64, name: &str) {
-        let sql = "insert into pgdbfs (mnt_pt, ino, parentid, name, size, is_dir) values ($1, (select nextval('ino_seq')), $2, $3, 4096, true)";
-        let conn = self.connect();
+        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 4096, true)";
+        let mut conn = self.connect();
         match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
-            Result::Ok(val) => { println!("$$$ {:?}", val) },
+            Result::Ok(val) => {
+                println!("$$$ {:?}", val)
+            }
             Result::Err(err) => {
                 panic!("mkdir failed: {:?}", err);
             }
         }
     }
-    
+
     pub fn mkfile(&mut self, mnt_pt: &String, parent: i64, name: &str) {
-        let sql = "insert into pgdbfs (mnt_pt, ino, parentid, name, size, is_dir) values ($1, (select nextval('ino_seq')), $2, $3, 0, false)";
-        let conn = self.connect();
-        match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
-            Result::Ok(val) => { println!("$$$ {:?}", val) },
+        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, segment_len, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 0, $4, false)";
+        let mut conn = self.connect();
+        match conn.execute(sql, &[&mnt_pt, &parent, &name, &fcache::DEFAULT_BUFFER_SZ]) {
+            Result::Ok(val) => {
+                println!("$$$ {:?}", val)
+            }
             Result::Err(err) => {
                 panic!("mkdir failed: {:?}", err);
             }
         }
     }
-    
-    pub fn setattr(&mut self, mnt_pt: &String, ino: i64, size: i64, create_ts: Timespec, update_ts: Timespec) -> u64 {
-        let sql = "update pgdbfs set create_ts=$1, update_ts=$2, size=$3 where mnt_pt=$4 and ino=$5";
-        let conn = self.connect();
-        let cts:Timespec = time::now_utc().to_timespec();
-        match conn.execute(sql, &[&create_ts, &update_ts, &size, &mnt_pt, &ino]) {
-            Result::Ok(val) => { return val; },
+
+    pub fn setattr(
+        &mut self,
+        mnt_pt: &String,
+        ino: i64,
+        size: i64,
+        create_ts: Timespec,
+        update_ts: Timespec,
+    ) -> u64 {
+        let sql =
+            "update pgdbfs set create_ts=$1, update_ts=$2, size=$3 where mnt_pt=$4 and ino=$5";
+        let mut conn = self.connect();
+
+        let cts: DateTime<Utc> =
+            DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(create_ts.sec as u64));
+
+        let uts: DateTime<Utc> =
+            DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(update_ts.sec as u64));
+        //        match conn.execute(sql, &[&create_ts, &update_ts, &size, &mnt_pt, &ino]) {
+        match conn.execute(sql, &[&cts, &uts, &size, &mnt_pt, &ino]) {
+            Result::Ok(val) => val,
             Result::Err(err) => {
-                eprintln!("Failed to setattr for: {}, {}, reason: {}", mnt_pt, ino, err);
-                return 0;
+                eprintln!(
+                    "Failed to setattr for: {}, {}, reason: {}",
+                    mnt_pt, ino, err
+                );
+                0
             }
         }
-        return 0;
+        //        return 0;
     }
-    
-    
+
     /// Looks up entry for the given mount point and parent inode and file name
     ///
     pub fn lookup(&mut self, mnt_pt: &String, ino: i64, name: &str) -> Option<Ent> {
-        println!("** {} - lookup called for: mnt_pt: {}, ino: {}, name: {}", TAG, mnt_pt, ino, name);
-        let conn = self.connect();
-        for row in &conn.query("select ino, name, is_dir, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3",
-                               &[&mnt_pt, &ino, &name]).unwrap() {
-            let e = Ent {
-                ino: row.get(0),
-                name: row.get(1),
-                is_dir: row.get(2),
-                size: row.get(3),
-                create_ts: row.get(4),
-                update_ts: row.get(5),
-            };
-            return Some(e)
+        let mut conn = self.connect();
+        let row_data = conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3",
+                               &[&mnt_pt, &ino, &name]);
+
+        match row_data {
+            Ok(row) => {
+                let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
+                let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
+                let e = Ent {
+                    id: row.get(0),
+                    ino: row.get(1),
+                    name: row.get(2),
+                    is_dir: row.get(3),
+                    size: row.get(4),
+                    segment_len: row.get(5),
+                    create_ts: c,
+                    update_ts: u,
+                };
+                Some(e)
+            }
+            Err(_err) => None,
         }
-        return None;
     }
-    
+
     /// Looks up an entry by a specific inode number for the given mount point
     ///
     pub fn lookup_by_ino(&mut self, mnt_pt: &String, ino: i64) -> Option<Ent> {
-        println!("** {} - lookup called for: {}", TAG, ino);
-        let conn = self.connect();
-        for row in &conn.query("select ino, name, is_dir, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and ino=$2",
-                               &[&mnt_pt, &ino]).unwrap() {
-            let e = Ent {
-                ino: row.get(0),
-                name: row.get(1),
-                is_dir: row.get(2),
-                size: row.get(3),
-                create_ts: row.get(4),
-                update_ts: row.get(5),
-            };
-            return Some(e)
+        let mut conn = self.connect();
+        let row_data = &conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and ino=$2",
+                               &[&mnt_pt, &ino]);
+
+        match row_data {
+            Ok(row) => {
+                let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
+                let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
+                let e = Ent {
+                    id: row.get(0),
+                    ino: row.get(1),
+                    name: row.get(2),
+                    is_dir: row.get(3),
+                    size: row.get(4),
+                    segment_len: row.get(5),
+                    create_ts: c,
+                    update_ts: u,
+                };
+                Some(e)
+            }
+            Err(_err) => None,
         }
-        return None;
     }
-    
+
     pub fn ls(&mut self, mnt_pt: String, ino: i64) -> Vec<Ent> {
-        let conn = self.connect();
+        let mut conn = self.connect();
         let mut v: Vec<Ent> = Vec::new();
         println!("** {} - ls: {}, {}", TAG, mnt_pt, ino);
-        for row in &conn.query("select name, is_dir, ino, size, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
+        for row in &conn.query("select id, name, is_dir, ino, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
+
+            let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
+            let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
             let e = Ent {
-                name: row.get(0),
-                is_dir: row.get(1),
-                ino: row.get(2),
-                size: row.get(3),
-                create_ts: row.get(4),
-                update_ts: row.get(5),
+                id: row.get(0),
+                name: row.get(1),
+                is_dir: row.get(2),
+                ino: row.get(3),
+                size: row.get(4),
+                segment_len: row.get(5),
+                create_ts: c,
+                update_ts: u,
             };
             v.push(e)
         }
         println!("** {} - ls found: {} entries", TAG, v.len());
-        return v;
+        v
     }
-    
-    pub fn write(&mut self, mnt_pt: &String, ino: i64, data: &[u8]) -> u64 {
-        let conn = self.connect();
-        let sql = "update pgdbfs set data=$1, size=$2 where mnt_pt=$3 and ino=$4";
-        let len: i64 = data.len() as i64;
-        match conn.execute(sql, &[&data, &len, &mnt_pt, &ino]) {
-            Result::Ok(val) => { return val; },
-            Result::Err(err) => {
-                eprintln!("Failed to write for: {}, {}, reason: {}", mnt_pt, ino, err);
-                return 0;
+
+    // pub fn read(&mut self, id: i64, offset: i64, size: u32) -> Option<Vec<u8>> {
+    //     let mut conn = self.connect();
+
+    //     //let offset_end = offset + size as i64;
+    //     let offset_end = offset;
+
+    //     let sql = "select file_offset_st, file_offset_en, data from pgdbfs_data where fsid=$1 and $2 between file_offset_st and file_offset_en order by file_offset_st";
+
+    //     println!(
+    //         "** {} - read (id: {}, offset_st: {}, offset_en: {}, {})",
+    //         TAG, id, offset, offset_end, sql
+    //     );
+
+    //     let mut fs_data: Vec<u8> = Vec::new();
+
+    //     let mut row_offset_min: i64 = i64::MAX;
+    //     let mut row_offset_max: i64 = i64::MIN;
+    //     for row in &conn.query(sql, &[&id, &offset_end]).unwrap() {
+    //         let d: Vec<u8> = row.get(2);
+    //         let o: i64 = row.get(0);
+    //         let e: i64 = row.get(1);
+    //         row_offset_min = cmp::min(row_offset_min, o);
+    //         println!("??? {} {} {}", o, e, row_offset_min);
+    //         fs_data.extend(d.iter().copied());
+    //     }
+
+    //     if fs_data.len() == 0 {
+    //         Some(fs_data)
+    //     } else {
+    //         let slice_st = (offset - row_offset_min) as usize;
+    //         let mut slice_en = (slice_st + size as usize) as usize;
+    //         if slice_en > fs_data.len() {
+    //             slice_en = fs_data.len();
+    //         }
+    //         println!(
+    //             "** {} read - initial_offset: {}, total_fs_len: {} slice_st: {} slice_en: {}",
+    //             TAG,
+    //             offset,
+    //             fs_data.len(),
+    //             slice_st,
+    //             slice_en
+    //         );
+    //         Some(
+    //             fs_data
+    //                 .drain(slice_st as usize..slice_en as usize)
+    //                 .collect(),
+    //         )
+    //     }
+    // }
+
+    pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
+        let mut conn = self.connect();
+        let sql = "select data from pgdbfs_data where fsid=$1 and segment_no=$2";
+        println!(
+            "** TAG load_segment(file_id: {}, segment_no: {}, sql: {})",
+            file_id, segment_no, sql
+        );
+        let row_data = conn.query_one(sql, &[file_id, segment_no]);
+        match row_data {
+            Ok(row) => {
+                println!("Row found...");
+                Some(row.get("data"))
+            }
+            Err(_err) => {
+                println!("No row found...");
+                None
             }
         }
-        return 0;    
-    }    
+    }
+
+    pub fn writep(&mut self, file_id: &i64, segment_no: &i64, data: &Vec<u8>) -> u64 {
+        let mut conn = self.connect();
+
+        let sql = "insert into pgdbfs_data (id, fsid, segment_no, data) values
+                           ( (select nextval('fsid_seq')), $1, $2, $3) on conflict on constraint pgdbfs_data_uk do update set data=$3";
+
+        //let seg_no = *segment_no as i32;
+        match conn.execute(sql, &[&file_id, &segment_no, &data]) {
+            Result::Ok(val) => {
+                self.update_file_sz(file_id, data.len() as i64);
+                val
+            }
+            Result::Err(err) => {
+                eprintln!("Failed to write for file_id: {}, reason: {}", file_id, err);
+                0
+            }
+        }
+    }
+
+    pub fn check_segment_exists(&mut self, file_id: &i64, segment_no: &i64) -> bool {
+        let mut conn = self.connect();
+        let sql = "select count(*)::int as cnt from pgdbfs_data where fsid=$1 and segment_no=$2";
+
+        println!(
+            "** TAG check_segment_exists(file_id: {}, segment_no: {}, sql: {})",
+            file_id, segment_no, sql
+        );
+        let row_data = conn.query_one(sql, &[file_id, segment_no]);
+        match row_data {
+            Ok(row) => {
+                let count: i32 = row.get("cnt");
+                if count == 0 {
+                    return false;
+                }
+                true
+            }
+            Err(_err) => false,
+        }
+    }
+
+    pub fn clear_file_data(&mut self, file_id: &i64) -> bool {
+        let mut conn = self.connect();
+        let sql = "delete from pgdbfs_data where fsid=$1";
+        println!("** {} - clear_data_for_file(file_id: {})", TAG, file_id);
+        match conn.execute(sql, &[file_id]) {
+            Result::Ok(_val) => true,
+            Result::Err(_err) => false,
+        }
+    }
+
+    fn update_file_sz(&mut self, id: &i64, fsize: i64) -> bool {
+        let mut conn = self.connect();
+
+        let sql = "update pgdbfs set size=size + $1 where id=$2";
+
+        match conn.execute(sql, &[&fsize, &id]) {
+            Result::Ok(_val) => true,
+            Result::Err(_err) => false,
+        }
+    }
 }
