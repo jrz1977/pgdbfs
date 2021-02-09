@@ -1,5 +1,4 @@
 extern crate chrono;
-//extern crate postgres;
 extern crate postgres;
 extern crate r2d2;
 extern crate r2d2_postgres;
@@ -18,8 +17,6 @@ use self::chrono::{DateTime, Utc};
 use std::vec::Vec;
 
 use fcache;
-
-static TAG: &str = "db";
 
 pub struct Ent {
     pub id: i64,
@@ -69,7 +66,7 @@ impl PgDbMgr {
             self.db_url, "pgdbfs", "pgdbfs", "pgdbfs"
         );
         let cm = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
-        println!("Connecting to : {}", host);
+        debug!("Connecting to : {}", host);
         //        let cm = PostgresConnectionManager::new(s, NoTls).unwrap();
         self.pool = Some(r2d2::Pool::new(cm).unwrap());
     }
@@ -91,7 +88,7 @@ impl PgDbMgr {
         let mut conn = self.connect();
         match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
             Result::Ok(val) => {
-                println!("$$$ {:?}", val)
+                debug!("$$$ {:?}", val)
             }
             Result::Err(err) => {
                 panic!("mkdir failed: {:?}", err);
@@ -104,7 +101,7 @@ impl PgDbMgr {
         let mut conn = self.connect();
         match conn.execute(sql, &[&mnt_pt, &parent, &name, &fcache::DEFAULT_BUFFER_SZ]) {
             Result::Ok(val) => {
-                println!("$$$ {:?}", val)
+                debug!("$$$ {:?}", val)
             }
             Result::Err(err) => {
                 panic!("mkdir failed: {:?}", err);
@@ -129,18 +126,17 @@ impl PgDbMgr {
 
         let uts: DateTime<Utc> =
             DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(update_ts.sec as u64));
-        //        match conn.execute(sql, &[&create_ts, &update_ts, &size, &mnt_pt, &ino]) {
+
         match conn.execute(sql, &[&cts, &uts, &size, &mnt_pt, &ino]) {
             Result::Ok(val) => val,
             Result::Err(err) => {
-                eprintln!(
+                debug!(
                     "Failed to setattr for: {}, {}, reason: {}",
                     mnt_pt, ino, err
                 );
                 0
             }
         }
-        //        return 0;
     }
 
     /// Looks up entry for the given mount point and parent inode and file name
@@ -191,9 +187,9 @@ impl PgDbMgr {
                     create_ts: c,
                     update_ts: u,
                 };
-                println!(
-                    "** {} - lookup_by_ino(mnt: {}, ino: {}, id: {}, name: {}, sz: {}",
-                    TAG, mnt_pt, ino, e.id, e.name, e.size
+                debug!(
+                    "lookup_by_ino(mnt: {}, ino: {}, id: {}, name: {}, sz: {}",
+                    mnt_pt, ino, e.id, e.name, e.size
                 );
                 Some(e)
             }
@@ -204,7 +200,7 @@ impl PgDbMgr {
     pub fn ls(&mut self, mnt_pt: String, ino: i64) -> Vec<Ent> {
         let mut conn = self.connect();
         let mut v: Vec<Ent> = Vec::new();
-        println!("** {} - ls: {}, {}", TAG, mnt_pt, ino);
+        debug!("ls: {}, {}", mnt_pt, ino);
         for row in &conn.query("select id, name, is_dir, ino, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
 
             let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
@@ -221,25 +217,25 @@ impl PgDbMgr {
             };
             v.push(e)
         }
-        println!("** {} - ls found: {} entries", TAG, v.len());
+        debug!("ls found: {} entries", v.len());
         v
     }
 
     pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
         let mut conn = self.connect();
         let sql = "select data from pgdbfs_data where fsid=$1 and segment_no=$2";
-        println!(
-            "** TAG load_segment(file_id: {}, segment_no: {})",
+        debug!(
+            "load_segment(file_id: {}, segment_no: {})",
             file_id, segment_no
         );
         let row_data = conn.query_one(sql, &[file_id, segment_no]);
         match row_data {
             Ok(row) => {
-                println!("Row found...");
+                debug!("Row found...");
                 Some(row.get("data"))
             }
             Err(_err) => {
-                println!("No row found...");
+                debug!("No row found...");
                 None
             }
         }
@@ -257,7 +253,7 @@ impl PgDbMgr {
                 val
             }
             Result::Err(err) => {
-                eprintln!("Failed to write for file_id: {}, reason: {}", file_id, err);
+                debug!("Failed to write for file_id: {}, reason: {}", file_id, err);
                 0
             }
         }
@@ -283,7 +279,7 @@ impl PgDbMgr {
     pub fn clear_file_data(&mut self, file_id: &i64) -> bool {
         let mut conn = self.connect();
         let sql = "delete from pgdbfs_data where fsid=$1";
-        println!("** {} - clear_data_for_file(file_id: {})", TAG, file_id);
+        debug!("clear_data_for_file(file_id: {})", file_id);
         match conn.execute(sql, &[file_id]) {
             Result::Ok(_val) => true,
             Result::Err(_err) => false,
@@ -310,10 +306,7 @@ impl PgDbMgr {
         match row_data {
             Ok(row) => {
                 let count: i32 = row.get("cnt");
-                println!(
-                    "** {} has_children(file_id: {}, cnt: {})",
-                    TAG, file_id, count
-                );
+                debug!("has_children(file_id: {}, cnt: {})", file_id, count);
 
                 if count == 0 {
                     return false;
@@ -324,6 +317,26 @@ impl PgDbMgr {
         }
     }
 
+    pub fn update_parent(&mut self, file_id: &i64, parent_id: &i64) -> bool {
+        let mut conn = self.connect();
+
+        let sql = "update pgdbfs set parentid=$1 where id=$2";
+
+        let updt_cnt = conn.execute(sql, &[parent_id, file_id]).unwrap();
+
+        return updt_cnt == 1;
+    }
+
+    pub fn update_name(&mut self, file_id: &i64, name: &str) -> bool {
+        let mut conn = self.connect();
+
+        let sql = "update pgdbfs set name=$1 where id=$2";
+
+        let updt_cnt = conn.execute(sql, &[&name, file_id]).unwrap();
+
+        return updt_cnt == 1;
+    }
+
     pub fn delete_entity(&mut self, file_id: &i64) -> u64 {
         let mut conn = self.connect();
 
@@ -331,7 +344,7 @@ impl PgDbMgr {
 
         let updt_cnt = conn.execute(sql, &[file_id]).unwrap();
 
-        println!("** {} delete_entity(file_id: {})", TAG, file_id);
+        debug!("delete_entity(file_id: {})", file_id);
 
         return updt_cnt;
     }

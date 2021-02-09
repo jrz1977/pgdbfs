@@ -75,7 +75,7 @@ impl FBuffer {
 
     pub fn add(&mut self, offset: i64, data: &[u8], db: &mut PgDbMgr) -> i32 {
         let segment_no_for_offset = self.get_segment_no(offset);
-        println!(
+        debug!(
             "** {} add(segment_no_for_offset: {} = {})",
             TAG, offset, segment_no_for_offset
         );
@@ -127,7 +127,7 @@ impl FBuffer {
     }
 
     pub fn save(&mut self, db: &mut PgDbMgr) -> i64 {
-        println!("Save called: {}", self.file_id);
+        debug!("Save called: {}", self.file_id);
         let mut total_written: i64 = 0;
         for s in self.segments.iter() {
             db.writep(&self.file_id, &s.segment_no, &s.data);
@@ -137,7 +137,7 @@ impl FBuffer {
     }
 
     pub fn read(&mut self, offset: i64, size: i32, db: &mut PgDbMgr) -> Option<Vec<u8>> {
-        println!(
+        debug!(
             "** {} read(id: {} offset = {}, len: {}",
             TAG, self.file_id, offset, size
         );
@@ -156,7 +156,7 @@ impl FBuffer {
 
                     let size_in_seg: i32 =
                         cmp::min((segment.len() as i64 - offset_in_seg) as i32, size_t);
-                    println!(
+                    debug!(
                         "** {} read(file_id: {}, seg_idx: {}, offset_in_seg: {}, size_in_seg: {}",
                         TAG, self.file_id, segs[i], offset_in_seg, size_in_seg
                     );
@@ -179,7 +179,7 @@ impl FBuffer {
         let offset_end: i64 = offset + size as i64;
         let first_seg_no = self.get_segment_no(offset);
         let last_seg_no = self.get_segment_no(offset_end);
-        println!(
+        debug!(
             "** {} - get_segment_indexes(st: {}, en: {}, range: {} - {})",
             TAG, offset, offset_end, first_seg_no, last_seg_no,
         );
@@ -198,7 +198,7 @@ impl FBuffer {
     fn get_or_load_segment(&mut self, segment_no: &i64, db: &mut PgDbMgr) -> i64 {
         // Check if exists in local cache
         let existing_idx = self.get_segment_cache(segment_no);
-        println!("Existing idx: {}", existing_idx);
+        debug!("Existing idx: {}", existing_idx);
         if existing_idx == -1 {
             match db.load_segment(&self.file_id, segment_no) {
                 Some(bytes) => {
@@ -210,7 +210,7 @@ impl FBuffer {
                     self.segments.push(s);
                 }
                 None => {
-                    println!("Row not found in db");
+                    debug!("Row not found in db");
                 }
             }
 
@@ -225,7 +225,7 @@ impl FBuffer {
                 return i as i64;
             }
         }
-        println!("Get segment cache not found {}", self.segments.len());
+        debug!("Get segment cache not found {}", self.segments.len());
 
         return -1;
     }
