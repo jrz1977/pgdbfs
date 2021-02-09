@@ -22,8 +22,6 @@ use db::PgDbMgr;
 
 use fcache;
 
-static TAG: &str = "fsys";
-
 #[derive(Debug)]
 pub struct PgDbFs {
     mount_pt: String,
@@ -62,21 +60,16 @@ impl DbFsUtils for PgDbFs {}
 
 impl Filesystem for PgDbFs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        println!(
-            "** {} - lookup(parent={}, name={:?})",
-            TAG,
-            parent,
-            name.to_str()
-        );
+        debug!("lookup(parent={}, name={:?})", parent, name.to_str());
         match name.to_str() {
             None => {
-                println!("No value in name, parent: {}", parent);
+                debug!("No value in name, parent: {}", parent);
                 return;
             }
             Some(n) => {
                 match self.db_mgr.lookup(&self.mount_pt, parent as i64, n) {
                     None => {
-                        println!("No entries found for parent: {}, name: {:?}", parent, name);
+                        debug!("No entries found for parent: {}, name: {:?}", parent, name);
                         reply.error(ENOENT);
                     }
                     Some(ent) => {
@@ -91,10 +84,12 @@ impl Filesystem for PgDbFs {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        println!("** {} - getattr(ino={})", TAG, ino);
+        debug!("getattr(ino={})", ino);
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, ino as i64) {
-            None => println!("** {} - No entries found for ino: {}", TAG, ino),
+            None => {
+                debug!("No entries found for ino: {}", ino);
+            }
             Some(ent) => {
                 let attr = self.make_file_entry(&ent);
                 let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
@@ -121,9 +116,9 @@ impl Filesystem for PgDbFs {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        println!(
-            "** {} - setattr (ino: {}, mode: {:?}, size: {:?}, at: {:?}, mt: {:?}",
-            TAG, _ino, _mode, _size, _atime, _mtime
+        debug!(
+            "setattr (ino: {}, mode: {:?}, size: {:?}, at: {:?}, mt: {:?}",
+            _ino, _mode, _size, _atime, _mtime
         );
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
@@ -153,9 +148,9 @@ impl Filesystem for PgDbFs {
                     self.db_mgr
                         .setattr(&self.mount_pt, _ino as i64, sz as i64, cr_tm, up_tm);
 
-                println!(
-                    "** {}, setattr(DB update count: {}, for: {}, {})",
-                    TAG, updt_count, self.mount_pt, _ino
+                debug!(
+                    "setattr(DB update count: {}, for: {}, {})",
+                    updt_count, self.mount_pt, _ino
                 );
 
                 let attr = self.make_file_entry(&ent);
@@ -174,9 +169,8 @@ impl Filesystem for PgDbFs {
         rdev: u32,
         reply: ReplyEntry,
     ) {
-        println!(
-            "** {} - mknod (parent: {}, mode: {}, rdev: {}, name: {:?}",
-            TAG,
+        debug!(
+            "mknod (parent: {}, mode: {}, rdev: {}, name: {:?}",
             parent,
             mode,
             rdev,
@@ -206,12 +200,7 @@ impl Filesystem for PgDbFs {
         _mode: u32,
         reply: ReplyEntry,
     ) {
-        println!(
-            "** {} - mkdir(parent: {}, name: {:?}",
-            TAG,
-            _parent,
-            _name.to_str()
-        );
+        debug!("mkdir(parent: {}, name: {:?}", _parent, _name.to_str());
         self.db_mgr
             .mkdir(&self.mount_pt, _parent as i64, &_name.to_str().unwrap());
         match self
@@ -253,7 +242,62 @@ impl Filesystem for PgDbFs {
         _newname: &OsStr,
         reply: ReplyEmpty,
     ) {
-        panic!("Not implemented");
+        let dst_dir = self.db_mgr.lookup_by_ino(&self.mount_pt, _newparent as i64);
+        match dst_dir {
+            None => {
+                error!(
+                    "Dst dir does not exist: mnt: {} ino: {}",
+                    self.mount_pt, _newparent
+                );
+                reply.error(ENOENT);
+                return;
+            }
+            Some(ent) => {
+                if !ent.is_dir {
+                    error!(
+                        "Dst is not a directory, mnt: {}, ino: {}",
+                        self.mount_pt, _newparent
+                    );
+                    reply.error(ENOTDIR);
+                    return;
+                }
+                let src_file =
+                    self.db_mgr
+                        .lookup(&self.mount_pt, _parent as i64, &_name.to_str().unwrap());
+                match src_file {
+                    None => {
+                        error!(
+                            "Src file does not exist, mnt: {}, ino: {}, file: {}",
+                            self.mount_pt,
+                            _parent,
+                            _name.to_str().unwrap()
+                        );
+                        reply.error(ENOENT);
+                        return;
+                    }
+                    Some(srcent) => {
+                        match self.db_mgr.lookup(
+                            &self.mount_pt,
+                            _newparent as i64,
+                            &_newname.to_str().unwrap(),
+                        ) {
+                            Some(dst_file) => {
+                                debug!(
+                                    "Removing dst file before rename: mnt: {}, ino: {}, name: {}",
+                                    &self.mount_pt, &dst_file.ino, &dst_file.name
+                                );
+                                self.db_mgr.delete_entity(&dst_file.id);
+                            }
+                            None => {}
+                        }
+                        self.db_mgr.update_parent(&srcent.id, &ent.ino);
+                        self.db_mgr
+                            .update_name(&srcent.id, _newname.to_str().unwrap());
+                        reply.ok();
+                    }
+                }
+            }
+        }
     }
 
     fn rmdir(&mut self, _req: &Request, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
@@ -276,11 +320,11 @@ impl Filesystem for PgDbFs {
     }
 
     fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        println!("** {} - open(io: {}, flags: {})", TAG, _ino, _flags);
+        debug!("open(io: {}, flags: {})", _ino, _flags);
         print_flags(&"open", _flags as i32);
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, _ino);
+                debug!("No entries found for ino: {}", _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
@@ -289,9 +333,9 @@ impl Filesystem for PgDbFs {
                 let ap: bool = _flags as i32 & O_APPEND == O_APPEND;
 
                 if (rw || wo) && !ap {
-                    println!(
-                        "** {} - open({}) - File opened for write, clearning data if exists",
-                        TAG, ent.id,
+                    debug!(
+                        "open({}) - File opened for write, clearning data if exists",
+                        ent.id,
                     );
                     self.db_mgr.clear_file_data(&ent.id);
                 }
@@ -311,9 +355,8 @@ impl Filesystem for PgDbFs {
         _size: u32,
         reply: ReplyData,
     ) {
-        println!(
-            "** {} - read(ino = {}, fh = {}, offset = {}, size: {}, uid: {})",
-            TAG,
+        debug!(
+            "read(ino = {}, fh = {}, offset = {}, size: {}, uid: {})",
             _ino,
             _fh,
             _offset,
@@ -322,7 +365,7 @@ impl Filesystem for PgDbFs {
         );
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, _ino);
+                debug!("No entries found for ino: {}", _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
@@ -348,9 +391,8 @@ impl Filesystem for PgDbFs {
         _flags: u32,
         reply: ReplyWrite,
     ) {
-        println!(
-            "** {} - write(ino: {}, offset: {}, data_len: {}, flags: {})",
-            TAG,
+        debug!(
+            "write(ino: {}, offset: {}, data_len: {}, flags: {})",
             _ino,
             _offset,
             _data.len(),
@@ -361,7 +403,7 @@ impl Filesystem for PgDbFs {
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, _ino);
+                debug!("No entries found for ino: {}", _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => {
@@ -373,7 +415,7 @@ impl Filesystem for PgDbFs {
                         return reply.written(_data.len() as u32);
                     }
                     None => {
-                        println!("No sauce");
+                        debug!("No sauce");
                     }
                 }
             }
@@ -381,17 +423,11 @@ impl Filesystem for PgDbFs {
     }
 
     fn flush(&mut self, _req: &Request, _ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
-        println!(
-            "** {} - flush(ino: {} fh: {}, uid: {})",
-            TAG,
-            _ino,
-            _fh,
-            _req.unique()
-        );
+        debug!("flush(ino: {} fh: {}, uid: {})", _ino, _fh, _req.unique());
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
-                println!("** {} - No entries found for ino: {}", TAG, _ino);
+                debug!("No entries found for ino: {}", _ino);
                 reply.error(ENOENT);
             }
             Some(ent) => match self.fcache.remove(&ent.id) {
@@ -416,9 +452,9 @@ impl Filesystem for PgDbFs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        println!(
-            "** {} - readdir(ino={}, fh={}, offset={}, mnt_pt: {})",
-            TAG, ino, fh, offset, self.mount_pt
+        debug!(
+            "readdir(ino={}, fh={}, offset={}, mnt_pt: {})",
+            ino, fh, offset, self.mount_pt
         );
         let off = 0;
         if offset == 0 {
@@ -427,7 +463,6 @@ impl Filesystem for PgDbFs {
             reply.add(ino, off + 1, FileType::Directory, &Path::new(".."));
 
             for e in entries {
-                //println!("** {} - Adding ent: {}", TAG, e.name);
                 reply.add(
                     e.ino as u64,
                     off + 1,
@@ -450,14 +485,14 @@ pub fn print_flags(tag: &str, flags: i32) {
     let wo: bool = flags as i32 & O_ACCMODE == O_WRONLY;
     let ap: bool = flags as i32 & O_APPEND == O_APPEND;
 
-    println!(
+    debug!(
         "** {} Flags: [value - ro-rw-wo-ap]:[{} - {}-{}-{}-{}]",
         tag, flags, ro, rw, wo, ap
     );
 }
 
 pub fn mount(path: String) {
-    println!("** {}, Mounting pgdbfs on path: {}", TAG, path);
+    debug!("Mounting pgdbfs on path: {}", path);
     let mountpt = Path::new(&path);
     //    let mut db_mgr = PgDbMgr::new(String::from("postgres://pgdbfs:pgdbfs@localhost/pgdbfs"));
     let mut db_mgr = PgDbMgr::new(String::from("localhost"));
@@ -472,7 +507,7 @@ pub fn mount(path: String) {
     let result = fuse::mount(pgdbfs, &mountpt, &[]);
     match result {
         Ok(_r) => {
-            println!("** {}, Mounting pgdbfs on path: {}", TAG, path);
+            debug!("Mounting pgdbfs on path: {}", path);
         }
         Err(err) => {
             panic!(err);

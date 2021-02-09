@@ -11,15 +11,12 @@ rand = "0.4"
 lazy_static = "1.0"
 r2d2 = "0.8"
 r2d2_postgres = "0.18.0"
-
-#time = "0.1.38"
-#postgres = { version = "0.19", features = ["with-chrono-0_4"] }
-#postgres = { version = "0.15", features = ["with-time"] }
+log = "0.4.0"
+env_logger = "0.8.2"
 
 time = "0.1.39"
 chrono = "0.4.19"
-
-#tokio-postgres = { version="0.5.1", features=["with-chrono-0_4"] }
+ctrlc = "3.1.7"
 
 [dependencies.postgres]
 version = "0.19"

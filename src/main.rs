@@ -1,49 +1,44 @@
+#[macro_use]
+extern crate log;
+
 pub mod db;
 pub mod fcache;
 pub mod fsys;
 
+use std::env;
+use std::path::Path;
+use std::process::Command;
+
 fn main() {
-    println!("Hello, world!");
+    env_logger::init();
 
-    let path = String::from("/tmp/pgdbfs");
-    fsys::mount(path);
+    let args: Vec<String> = env::args().collect();
 
-    /*
-    let mut db_mgr = PgDbMgr::new(String::from("localhost"));
-    db_mgr.init();
-
-    let mut fc = fcache::FCache::new();
-
-    fc.init(1);
-
-    println!("FileCache: {}", fc);
-
-    let mut fb = fcache::FBuffer::new(1, 1000);
-
-    let mut c: u8 = 0;
-    for i in 0..4 {
-        let mut v: Vec<u8> = Vec::new();
-        for j in 0..8 {
-            c += 1;
-            v.push(c);
-        }
-        fb.add(&v, &db_mgr);
-        println!("{} -- {:?}", i, v);
+    if args.len() != 2 {
+        println!("usage: cargo run [mount point]");
+        std::process::exit(1);
     }
 
-    println!("FBuffer: {:?}", fb);
+    let mnt_pt = &args[1];
 
-    println!("FBuffer: {}", fb);
-    let off: i64 = 1;
-    let len: i32 = 10;
-    let segments = fb.get_segment_indexes(off, len);
+    if Path::new(mnt_pt).exists() {
+        let umount_cmd = format!("fusermount -u {}", mnt_pt);
 
-    let read = fb.read(off, len);
-    println!(
-        "$$$$ off: {}, len: {}, indexes: {:?}",
-        off,
-        len,
-        segments.unwrap()
-    );
-    println!("Read data: {:?}", read);*/
+        ctrlc::set_handler(move || {
+            error!("Ctrl-C encountered");
+
+            Command::new("sh")
+                .arg("-c")
+                .arg(&umount_cmd)
+                .output()
+                .expect("");
+
+            std::process::exit(0);
+        })
+        .expect("Error setting Ctrl-C handler");
+
+        fsys::mount(mnt_pt.to_string());
+    } else {
+        error!("Path: {} does not exist", mnt_pt);
+    }
 }
