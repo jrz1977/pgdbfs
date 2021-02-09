@@ -1,9 +1,11 @@
 extern crate chrono;
+extern crate dirs;
 extern crate fuse;
 extern crate libc;
 extern crate rand;
 extern crate time;
 
+use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -21,6 +23,23 @@ use db;
 use db::PgDbMgr;
 
 use fcache;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PgDbFsConfig {
+    pub db_host: String,
+    pub db_user: String,
+    pub db_pass: String,
+}
+
+impl ::std::default::Default for PgDbFsConfig {
+    fn default() -> Self {
+        Self {
+            db_host: "localhost".to_string(),
+            db_user: "pgdbfs".to_string(),
+            db_pass: "pgdbfs".to_string(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct PgDbFs {
@@ -492,10 +511,16 @@ pub fn print_flags(tag: &str, flags: i32) {
 }
 
 pub fn mount(path: String) {
-    debug!("Mounting pgdbfs on path: {}", path);
+    let home = dirs::home_dir().unwrap();
+
+    let cfg_path = format!("{}/.pgdbfs/pgdbfs", home.to_str().unwrap());
+
+    let cfg: PgDbFsConfig = confy::load(&cfg_path).unwrap();
+
+    info!("Mounting pgdbfs on path: {}", path);
+
     let mountpt = Path::new(&path);
-    //    let mut db_mgr = PgDbMgr::new(String::from("postgres://pgdbfs:pgdbfs@localhost/pgdbfs"));
-    let mut db_mgr = PgDbMgr::new(String::from("localhost"));
+    let mut db_mgr = PgDbMgr::new(String::from("localhost"), cfg);
     db_mgr.init();
 
     let pgdbfs = PgDbFs {

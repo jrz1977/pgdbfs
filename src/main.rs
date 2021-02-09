@@ -9,6 +9,26 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
+//#[macro_use]
+extern crate serde;
+
+// #[derive(Debug, Serialize, Deserialize)]
+// struct PgDbFsConfig {
+//     db_host: String,
+//     db_user: String,
+//     db_pass: String,
+// }
+
+// impl ::std::default::Default for PgDbFsConfig {
+//     fn default() -> Self {
+//         Self {
+//             db_host: "localhost".to_string(),
+//             db_user: "pgdbfs".to_string(),
+//             db_pass: "pgdbfs".to_string(),
+//         }
+//     }
+// }
+
 fn main() {
     env_logger::init();
 
@@ -25,7 +45,7 @@ fn main() {
         let umount_cmd = format!("fusermount -u {}", mnt_pt);
 
         ctrlc::set_handler(move || {
-            error!("Ctrl-C encountered");
+            error!("Ctrl-C: Unmounting file system");
 
             Command::new("sh")
                 .arg("-c")

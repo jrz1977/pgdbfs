@@ -17,6 +17,7 @@ use self::chrono::{DateTime, Utc};
 use std::vec::Vec;
 
 use fcache;
+use fsys::PgDbFsConfig;
 
 pub struct Ent {
     pub id: i64,
@@ -37,6 +38,7 @@ pub struct EntData {
 #[derive(Debug)]
 pub struct PgDbMgr {
     db_url: String,
+    cfg: PgDbFsConfig,
     pool: Option<r2d2::Pool<PostgresConnectionManager<NoTls>>>,
 }
 
@@ -53,9 +55,10 @@ pub fn make_a_pool(db_url: String) -> r2d2::Pool<PostgresConnectionManager<NoTls
 }
 
 impl PgDbMgr {
-    pub fn new(url: String) -> PgDbMgr {
+    pub fn new(url: String, cfg: PgDbFsConfig) -> PgDbMgr {
         PgDbMgr {
             db_url: url,
+            cfg: cfg,
             pool: None,
         }
     }
@@ -63,7 +66,7 @@ impl PgDbMgr {
     pub fn init(&mut self) {
         let host = format!(
             "host = {} user = {} password = {} dbname = {}",
-            self.db_url, "pgdbfs", "pgdbfs", "pgdbfs"
+            self.cfg.db_host, self.cfg.db_user, self.cfg.db_pass, self.cfg.db_user
         );
         let cm = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
         debug!("Connecting to : {}", host);
