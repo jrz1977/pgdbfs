@@ -5,7 +5,8 @@ use std::fmt;
 use std::iter::FromIterator;
 
 //pub const DEFAULT_BUFFER_SZ: i32 = 8;
-pub const DEFAULT_BUFFER_SZ: i32 = 1048576;
+//pub const DEFAULT_BUFFER_SZ: i32 = 1048576;
+pub const DEFAULT_BUFFER_SZ: i32 = 2097152;
 //pub const DEFAULT_BUFFER_SZ: i32 = 1024 * 8;
 
 static TAG: &str = "FCache";
@@ -112,46 +113,8 @@ impl FBuffer {
         }
         self.trim_segments(db);
 
-        println!("added data: {}", self.file_id);
         return 0;
     }
-
-    // pub fn add(&mut self, data: &[u8], db: &mut PgDbMgr) -> i32 {
-    //     if self.segments.is_empty() {
-    //         let seg = FSegment::new(self.file_id, 0, self.segment_len);
-    //         self.segments.push(seg);
-    //     } else if self.segments.last().unwrap().len() == self.segment_len as usize {
-    //         let seg_no = self.segments.last().unwrap().segment_no + 1;
-    //         let seg = FSegment::new(self.file_id, seg_no, self.segment_len);
-    //         self.segments.push(seg);
-    //     }
-
-    //     let index = self.segments.len() - 1;
-
-    //     let last_seg_space = cmp::min(
-    //         (self.segment_len as usize - self.segments.last().unwrap().len()),
-    //         data.len(),
-    //     );
-
-    //     self.segments
-    //         .last_mut()
-    //         .unwrap()
-    //         .data
-    //         .extend(data[0..last_seg_space].iter().copied());
-
-    //     let rem = &data[last_seg_space..];
-    //     let iter = rem.chunks(self.segment_len as usize);
-    //     for chunk in iter {
-    //         let seg_no = self.segments.last().unwrap().segment_no + 1;
-    //         let mut new_seg = FSegment::new(self.file_id, seg_no, self.segment_len);
-    //         new_seg.data.extend(chunk.to_vec());
-    //         self.segments.push(new_seg);
-    //     }
-    //     self.trim_segments(db);
-
-    //     println!("added data: {}", self.file_id);
-    //     return 0;
-    // }
 
     pub fn trim_segments(&mut self, db: &mut PgDbMgr) {
         if self.segments.len() > 3 {

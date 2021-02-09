@@ -1,3 +1,4 @@
+extern crate chrono;
 extern crate fuse;
 extern crate libc;
 extern crate rand;
@@ -6,13 +7,15 @@ extern crate time;
 use std::ffi::OsStr;
 use std::path::Path;
 
+use self::chrono::{DateTime, Utc};
 use self::fuse::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request,
 };
-use self::libc::ENOENT;
+use self::libc::{EISDIR, ENOENT, ENOTDIR, ENOTEMPTY};
 use self::libc::{O_ACCMODE, O_APPEND, O_RDONLY, O_RDWR, O_WRONLY};
 use self::time::Timespec;
+use std::time::{Duration, UNIX_EPOCH};
 
 use db;
 use db::PgDbMgr;
@@ -100,7 +103,6 @@ impl Filesystem for PgDbFs {
             }
         }
     }
-    //
 
     fn setattr(
         &mut self,
@@ -123,34 +125,42 @@ impl Filesystem for PgDbFs {
             "** {} - setattr (ino: {}, mode: {:?}, size: {:?}, at: {:?}, mt: {:?}",
             TAG, _ino, _mode, _size, _atime, _mtime
         );
-        let cts: Timespec = time::now_utc().to_timespec();
-        let cr_tm = match _atime {
-            Some(val) => val,
-            _ => cts,
-        };
-        let up_tm = match _mtime {
-            Some(val) => val,
-            _ => cts,
-        };
-        let sz = match _size {
-            Some(val) => val,
-            _ => 0,
-        };
-        let updt_count = self
-            .db_mgr
-            .setattr(&self.mount_pt, _ino as i64, sz as i64, cr_tm, up_tm);
-
-        println!(
-            "** {}, setattr(DB update count: {}, for: {}, {}",
-            TAG, updt_count, self.mount_pt, _ino
-        );
 
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => panic!("Failed to lookup created dir"),
-            Some(ent) => {
+            Some(mut ent) => {
+                //let cts: Timespec = time::now_utc().to_timespec();
+                let cr_tm = match _atime {
+                    Some(val) => val,
+                    _ => Timespec::new(ent.create_ts.timestamp(), 0),
+                };
+                let up_tm = match _mtime {
+                    Some(val) => val,
+                    _ => Timespec::new(ent.update_ts.timestamp(), 0),
+                };
+                let sz = match _size {
+                    Some(val) => val as i64,
+                    _ => ent.size,
+                };
+
+                ent.size = sz;
+                ent.create_ts =
+                    DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(cr_tm.sec as u64));
+                ent.update_ts =
+                    DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(up_tm.sec as u64));
+
+                let updt_count =
+                    self.db_mgr
+                        .setattr(&self.mount_pt, _ino as i64, sz as i64, cr_tm, up_tm);
+
+                println!(
+                    "** {}, setattr(DB update count: {}, for: {}, {})",
+                    TAG, updt_count, self.mount_pt, _ino
+                );
+
                 let attr = self.make_file_entry(&ent);
-                let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
-                reply.attr(&ts, &attr);
+
+                reply.attr(&attr.ctime, &attr);
             }
         }
     }
@@ -213,6 +223,54 @@ impl Filesystem for PgDbFs {
                 let attr = self.make_file_entry(&ent);
                 let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
                 reply.entry(&ts, &attr, 0);
+            }
+        }
+    }
+
+    fn unlink(&mut self, _req: &Request, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
+        match self
+            .db_mgr
+            .lookup(&self.mount_pt, _parent as i64, &_name.to_str().unwrap())
+        {
+            None => reply.error(ENOENT),
+            Some(ent) => {
+                if ent.is_dir {
+                    reply.error(EISDIR)
+                } else {
+                    self.db_mgr.delete_entity(&ent.id);
+                    reply.ok();
+                }
+            }
+        }
+    }
+
+    fn rename(
+        &mut self,
+        _req: &Request,
+        _parent: u64,
+        _name: &OsStr,
+        _newparent: u64,
+        _newname: &OsStr,
+        reply: ReplyEmpty,
+    ) {
+        panic!("Not implemented");
+    }
+
+    fn rmdir(&mut self, _req: &Request, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
+        match self
+            .db_mgr
+            .lookup(&self.mount_pt, _parent as i64, &_name.to_str().unwrap())
+        {
+            None => reply.error(ENOENT),
+            Some(ent) => {
+                if !ent.is_dir {
+                    reply.error(ENOTDIR)
+                } else if self.db_mgr.has_children(&ent.ino) {
+                    reply.error(ENOTEMPTY)
+                } else {
+                    self.db_mgr.delete_entity(&ent.id);
+                    reply.ok();
+                }
             }
         }
     }

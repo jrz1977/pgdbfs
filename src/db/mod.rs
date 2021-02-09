@@ -87,7 +87,7 @@ impl PgDbMgr {
     }
 
     pub fn mkdir(&mut self, mnt_pt: &String, parent: i64, name: &str) {
-        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 4096, true)";
+        let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, segment_len, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 4096, 0, true)";
         let mut conn = self.connect();
         match conn.execute(sql, &[&mnt_pt, &parent, &name]) {
             Result::Ok(val) => {
@@ -191,6 +191,10 @@ impl PgDbMgr {
                     create_ts: c,
                     update_ts: u,
                 };
+                println!(
+                    "** {} - lookup_by_ino(mnt: {}, ino: {}, id: {}, name: {}, sz: {}",
+                    TAG, mnt_pt, ino, e.id, e.name, e.size
+                );
                 Some(e)
             }
             Err(_err) => None,
@@ -221,62 +225,12 @@ impl PgDbMgr {
         v
     }
 
-    // pub fn read(&mut self, id: i64, offset: i64, size: u32) -> Option<Vec<u8>> {
-    //     let mut conn = self.connect();
-
-    //     //let offset_end = offset + size as i64;
-    //     let offset_end = offset;
-
-    //     let sql = "select file_offset_st, file_offset_en, data from pgdbfs_data where fsid=$1 and $2 between file_offset_st and file_offset_en order by file_offset_st";
-
-    //     println!(
-    //         "** {} - read (id: {}, offset_st: {}, offset_en: {}, {})",
-    //         TAG, id, offset, offset_end, sql
-    //     );
-
-    //     let mut fs_data: Vec<u8> = Vec::new();
-
-    //     let mut row_offset_min: i64 = i64::MAX;
-    //     let mut row_offset_max: i64 = i64::MIN;
-    //     for row in &conn.query(sql, &[&id, &offset_end]).unwrap() {
-    //         let d: Vec<u8> = row.get(2);
-    //         let o: i64 = row.get(0);
-    //         let e: i64 = row.get(1);
-    //         row_offset_min = cmp::min(row_offset_min, o);
-    //         println!("??? {} {} {}", o, e, row_offset_min);
-    //         fs_data.extend(d.iter().copied());
-    //     }
-
-    //     if fs_data.len() == 0 {
-    //         Some(fs_data)
-    //     } else {
-    //         let slice_st = (offset - row_offset_min) as usize;
-    //         let mut slice_en = (slice_st + size as usize) as usize;
-    //         if slice_en > fs_data.len() {
-    //             slice_en = fs_data.len();
-    //         }
-    //         println!(
-    //             "** {} read - initial_offset: {}, total_fs_len: {} slice_st: {} slice_en: {}",
-    //             TAG,
-    //             offset,
-    //             fs_data.len(),
-    //             slice_st,
-    //             slice_en
-    //         );
-    //         Some(
-    //             fs_data
-    //                 .drain(slice_st as usize..slice_en as usize)
-    //                 .collect(),
-    //         )
-    //     }
-    // }
-
     pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
         let mut conn = self.connect();
         let sql = "select data from pgdbfs_data where fsid=$1 and segment_no=$2";
         println!(
-            "** TAG load_segment(file_id: {}, segment_no: {}, sql: {})",
-            file_id, segment_no, sql
+            "** TAG load_segment(file_id: {}, segment_no: {})",
+            file_id, segment_no
         );
         let row_data = conn.query_one(sql, &[file_id, segment_no]);
         match row_data {
@@ -297,7 +251,6 @@ impl PgDbMgr {
         let sql = "insert into pgdbfs_data (id, fsid, segment_no, data) values
                            ( (select nextval('fsid_seq')), $1, $2, $3) on conflict on constraint pgdbfs_data_uk do update set data=$3";
 
-        //let seg_no = *segment_no as i32;
         match conn.execute(sql, &[&file_id, &segment_no, &data]) {
             Result::Ok(val) => {
                 self.update_file_sz(file_id, data.len() as i64);
@@ -314,10 +267,6 @@ impl PgDbMgr {
         let mut conn = self.connect();
         let sql = "select count(*)::int as cnt from pgdbfs_data where fsid=$1 and segment_no=$2";
 
-        println!(
-            "** TAG check_segment_exists(file_id: {}, segment_no: {}, sql: {})",
-            file_id, segment_no, sql
-        );
         let row_data = conn.query_one(sql, &[file_id, segment_no]);
         match row_data {
             Ok(row) => {
@@ -350,5 +299,40 @@ impl PgDbMgr {
             Result::Ok(_val) => true,
             Result::Err(_err) => false,
         }
+    }
+
+    pub fn has_children(&mut self, file_id: &i64) -> bool {
+        let mut conn = self.connect();
+
+        let sql = "select count(*)::int as cnt from pgdbfs where parentid=$1";
+
+        let row_data = conn.query_one(sql, &[file_id]);
+        match row_data {
+            Ok(row) => {
+                let count: i32 = row.get("cnt");
+                println!(
+                    "** {} has_children(file_id: {}, cnt: {})",
+                    TAG, file_id, count
+                );
+
+                if count == 0 {
+                    return false;
+                }
+                true
+            }
+            Err(_err) => false,
+        }
+    }
+
+    pub fn delete_entity(&mut self, file_id: &i64) -> u64 {
+        let mut conn = self.connect();
+
+        let sql = "delete from pgdbfs where id=$1";
+
+        let updt_cnt = conn.execute(sql, &[file_id]).unwrap();
+
+        println!("** {} delete_entity(file_id: {})", TAG, file_id);
+
+        return updt_cnt;
     }
 }
