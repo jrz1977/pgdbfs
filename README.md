@@ -37,3 +37,10 @@ db_segment_len = 1048576
 ```
 $ RUST_LOG=info cargo run /tmp/my_storage
 ```
+## Troubleshooting
+
+### Enable debug
+```
+export RUST_LOG="pgdbfs::fsys=debug,pgdbfs::db=debug,pgdbfs::fcache=debug"
+cargo run /tmp/my_storage
+```
