@@ -36,7 +36,8 @@ $ mkdir -p /tmp/my_storage
 
 - Create config file in $HOME/.pgdbfs/pgdbfs.toml
 
-```db_host = 'localhost'
+```
+db_host = 'localhost'
 db_user = 'pgdbfs'
 db_pass = 'pgdbfs'
 db_segment_len = 1048576
