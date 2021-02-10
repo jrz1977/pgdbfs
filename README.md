@@ -10,9 +10,18 @@ PostgreSQL Database as File System
 
 ## Setup
 
+### Setup mount point
+```
+$ mkdir -p /tmp/my_storage
+```
+
 ### Setup DB Schema
 
 - Create database to use for pgdbfs
+- Update pgdbfs.sql change line to point to the mount point using full path
+```
+\set mntpt /tmp/my_storage
+```
 - Run pgdbfs.sql to initialize schema
 
 ### Setup configuration file
@@ -24,11 +33,7 @@ db_user = 'pgdbfs'
 db_pass = 'pgdbfs'
 db_segment_len = 1048576
 ```
-### Setup mount point
-```
-$ mkdir -p $HOME/pgdbfs/my_storage
-```
 ## Running the Filesystem
 ```
-$ RUST_LOG=info cargo run $HOME/pgdbfs/my_storage
+$ RUST_LOG=info cargo run /tmp/my_storage
 ```
