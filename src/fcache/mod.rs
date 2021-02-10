@@ -243,7 +243,7 @@ impl FBuffer {
 
 #[derive(Debug)]
 pub struct FCache {
-    pub fcache: HashMap<i64, FBuffer>,
+    pub fcache: HashMap<String, FBuffer>,
 }
 
 impl fmt::Display for FCache {
@@ -259,17 +259,36 @@ impl FCache {
         }
     }
 
-    pub fn get(&mut self, id: &i64) -> Option<&mut FBuffer> {
-        self.fcache.get_mut(id)
+    pub fn get(&mut self, mnt_pt: &String, ino: &i64) -> Option<&mut FBuffer> {
+        let key = self.make_key(mnt_pt, ino);
+        self.fcache.get_mut(&key)
     }
 
-    pub fn remove(&mut self, id: &i64) -> Option<FBuffer> {
-        self.fcache.remove(id)
+    pub fn get_cached(&mut self, mnt_pt: &String, ino: i64) -> Option<&mut FBuffer> {
+        let key = self.make_key(mnt_pt, &ino);
+        self.fcache.get_mut(&key)
     }
 
-    pub fn init(&mut self, id: i64, flags: u32, segment_len: i32) {
+    pub fn remove(&mut self, mnt_pt: &String, ino: &i64) -> Option<FBuffer> {
+        let key = self.make_key(mnt_pt, ino);
+        self.fcache.remove(&key)
+    }
+
+    pub fn init(&mut self, mnt_pt: &String, ino: &i64, id: i64, flags: u32, segment_len: i32) {
+        info!("Caching file: mnt_pt: {}, ino: {})", mnt_pt, ino);
+        let key = self.make_key(mnt_pt, ino);
+        info!("Key = {}", key);
         self.fcache
-            .entry(id)
+            .entry(key)
             .or_insert_with(|| FBuffer::new(id, segment_len, flags));
+    }
+
+    fn make_key(&mut self, mnt_pt: &String, ino: &i64) -> String {
+        //let mut key: String = &[mnt_pt, &ino.to_string()].join();
+        let mut key: String = String::new();
+        key.push_str(mnt_pt);
+        key.push_str("-");
+        key.push_str(&ino.to_string());
+        return key;
     }
 }
