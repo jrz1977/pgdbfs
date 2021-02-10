@@ -1,3 +1,5 @@
+\set mntpt /tmp/my_storage
+
 drop table if exists pgdbfs_data;
 drop table if exists pgdbfs;
 
@@ -35,7 +37,7 @@ create sequence fsid_seq;
 insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, segment_len, is_dir)
  values (
    (select nextval('fsid_seq')),
-   '/tmp/pgdbfs',
+   :'mntpt',
    (select nextval('ino_seq')),
    0,
    'rz',
