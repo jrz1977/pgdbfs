@@ -28,6 +28,8 @@ create table pgdbfs_data (
 );
 
 create index mnt_pt_idx on pgdbfs(mnt_pt);
+create index pgdbfs_data_fsid_idx on pgdbfs_data(fsid);
+create index pgdbfs_data_fsid_seg_no_idx on pgdbfs_data(fsid, segment_no);
 
 drop sequence ino_seq;
 create sequence ino_seq;

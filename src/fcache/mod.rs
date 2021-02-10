@@ -264,9 +264,28 @@ impl FCache {
         self.fcache.get_mut(&key)
     }
 
-    pub fn get_cached(&mut self, mnt_pt: &String, ino: i64) -> Option<&mut FBuffer> {
+    pub fn get_cached(
+        &mut self,
+        mnt_pt: &String,
+        ino: i64,
+        flags: u32,
+        db: &mut PgDbMgr,
+    ) -> Option<&mut FBuffer> {
         let key = self.make_key(mnt_pt, &ino);
-        self.fcache.get_mut(&key)
+        if self.fcache.contains_key(&key) {
+            return self.fcache.get_mut(&key);
+        }
+        info!("Cached file not found, looking up in db {}", ino);
+        match db.lookup_by_ino(mnt_pt, ino as i64) {
+            None => {
+                debug!("No entries found for ino: {}", ino);
+                None
+            }
+            Some(ent) => {
+                self.init(mnt_pt, ino, ent.id, flags, ent.segment_len);
+                self.fcache.get_mut(&key)
+            }
+        }
     }
 
     pub fn remove(&mut self, mnt_pt: &String, ino: &i64) -> Option<FBuffer> {
@@ -274,9 +293,9 @@ impl FCache {
         self.fcache.remove(&key)
     }
 
-    pub fn init(&mut self, mnt_pt: &String, ino: &i64, id: i64, flags: u32, segment_len: i32) {
+    pub fn init(&mut self, mnt_pt: &String, ino: i64, id: i64, flags: u32, segment_len: i32) {
         info!("Caching file: mnt_pt: {}, ino: {})", mnt_pt, ino);
-        let key = self.make_key(mnt_pt, ino);
+        let key = self.make_key(mnt_pt, &ino);
         info!("Key = {}", key);
         self.fcache
             .entry(key)

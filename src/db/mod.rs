@@ -55,7 +55,7 @@ impl PgDbMgr {
         );
         let cm = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
         debug!("Connecting to : {}", host);
-        self.pool = Some(r2d2::Pool::new(cm).unwrap());
+        self.pool = Some(r2d2::Pool::builder().max_size(15).build(cm).unwrap());
     }
 
     fn connect(&self) -> PooledConnection<PostgresConnectionManager<NoTls>> {

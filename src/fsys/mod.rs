@@ -372,7 +372,7 @@ impl Filesystem for PgDbFs {
                 }
 
                 self.fcache
-                    .init(&self.mount_pt, &ent.ino, ent.id, _flags, ent.segment_len);
+                    .init(&self.mount_pt, ent.ino, ent.id, _flags, ent.segment_len);
                 reply.opened(_ino, _flags)
             }
         }
@@ -397,10 +397,13 @@ impl Filesystem for PgDbFs {
             _req.unique()
         );
 
-        /*
-        match self.fcache.get_cached(&self.mount_pt, _ino as i64) {
+        match self
+            .fcache
+            .get_cached(&self.mount_pt, _ino as i64, 0, &mut self.db_mgr)
+        {
             None => {
                 error!("File not cached, ino: {}", _ino);
+                reply.error(ENOENT)
             }
             Some(fb) => {
                 info!("Cache found, ino: {}", fb.file_id);
@@ -409,8 +412,8 @@ impl Filesystem for PgDbFs {
                     None => reply.error(ENOENT),
                 }
             }
-        }*/
-
+        }
+        /*
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
                 debug!("No entries found for ino: {}", _ino);
@@ -426,7 +429,7 @@ impl Filesystem for PgDbFs {
                     None => reply.error(ENOENT),
                 }
             }
-        }
+        }*/
     }
 
     fn write(
@@ -449,6 +452,22 @@ impl Filesystem for PgDbFs {
 
         print_flags(&"write", _flags as i32);
 
+        match self
+            .fcache
+            .get_cached(&self.mount_pt, _ino as i64, _flags, &mut self.db_mgr)
+        {
+            None => {
+                error!("File not cached, ino: {}", _ino);
+                reply.error(ENOENT)
+            }
+            Some(fb) => {
+                info!("Cache found, ino: {}", fb.file_id);
+                fb.add(_offset, _data, &mut self.db_mgr);
+                return reply.written(_data.len() as u32);
+            }
+        }
+
+        /*
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
                 debug!("No entries found for ino: {}", _ino);
@@ -456,7 +475,7 @@ impl Filesystem for PgDbFs {
             }
             Some(ent) => {
                 self.fcache
-                    .init(&self.mount_pt, &ent.ino, ent.id, _flags, ent.segment_len);
+                    .init(&self.mount_pt, ent.ino, ent.id, _flags, ent.segment_len);
                 let fb_opt = self.fcache.get(&self.mount_pt, &ent.ino);
                 match fb_opt {
                     Some(fb) => {
@@ -468,7 +487,7 @@ impl Filesystem for PgDbFs {
                     }
                 }
             }
-        }
+        }*/
     }
 
     fn flush(&mut self, _req: &Request, _ino: u64, _fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
