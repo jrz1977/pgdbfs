@@ -4,11 +4,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter::FromIterator;
 
-//pub const DEFAULT_BUFFER_SZ: i32 = 8;
-//pub const DEFAULT_BUFFER_SZ: i32 = 1048576;
-pub const DEFAULT_BUFFER_SZ: i32 = 2097152;
-//pub const DEFAULT_BUFFER_SZ: i32 = 1024 * 8;
-
 static TAG: &str = "FCache";
 
 #[derive(Debug)]
@@ -151,6 +146,7 @@ impl FBuffer {
                     let seg_num: i64 = segs[i] as i64;
 
                     let segment_idx = self.get_or_load_segment(&seg_num, db);
+                    //println!("{}, {}, {}", offset, size, segment_idx);
                     let segment = &self.segments[segment_idx as usize];
                     let offset_in_seg: i64 = offset_t - (seg_num * self.segment_len as i64);
 
@@ -211,6 +207,20 @@ impl FBuffer {
                 }
                 None => {
                     debug!("Row not found in db");
+                    error!("No segment in db for segment_no: {}", segment_no);
+
+                    let potential_offset = segment_no * self.segment_len as i64;
+
+                    let file_sz = db.get_file_sz(&self.file_id);
+
+                    if potential_offset >= file_sz {
+                        info!("offset exceeds file size, returning last segment");
+                        return self.segments.len() as i64 - 1;
+                    }
+                    panic!(
+                        "Invalid offset for file: {}, segment_no: {}",
+                        self.file_id, segment_no
+                    );
                 }
             }
 
@@ -258,10 +268,6 @@ impl FCache {
     }
 
     pub fn init(&mut self, id: i64, flags: u32, segment_len: i32) {
-        // self.fcache
-        //     .entry(id)
-        //     .or_insert_with(|| FBuffer::new(id, DEFAULT_BUFFER_SZ, flags));
-
         self.fcache
             .entry(id)
             .or_insert_with(|| FBuffer::new(id, segment_len, flags));

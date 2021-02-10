@@ -1,9 +1,11 @@
 extern crate chrono;
+extern crate dirs;
 extern crate fuse;
 extern crate libc;
 extern crate rand;
 extern crate time;
 
+use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -22,11 +24,31 @@ use db::PgDbMgr;
 
 use fcache;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PgDbFsConfig {
+    pub db_host: String,
+    pub db_user: String,
+    pub db_pass: String,
+    pub db_segment_len: i32,
+}
+
+impl ::std::default::Default for PgDbFsConfig {
+    fn default() -> Self {
+        Self {
+            db_host: "localhost".to_string(),
+            db_user: "pgdbfs".to_string(),
+            db_pass: "pgdbfs".to_string(),
+            db_segment_len: 1048576,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PgDbFs {
     mount_pt: String,
     db_mgr: PgDbMgr,
     fcache: fcache::FCache,
+    cfg: PgDbFsConfig,
 }
 
 pub trait DbFsUtils {
@@ -177,8 +199,12 @@ impl Filesystem for PgDbFs {
             name.to_str()
         );
 
-        self.db_mgr
-            .mkfile(&self.mount_pt, parent as i64, &name.to_str().unwrap());
+        self.db_mgr.mkfile(
+            &self.mount_pt,
+            parent as i64,
+            &name.to_str().unwrap(),
+            &self.cfg.db_segment_len,
+        );
         match self
             .db_mgr
             .lookup(&self.mount_pt, parent as i64, &name.to_str().unwrap())
@@ -339,6 +365,7 @@ impl Filesystem for PgDbFs {
                     );
                     self.db_mgr.clear_file_data(&ent.id);
                 }
+
                 self.fcache.init(ent.id, _flags, ent.segment_len);
                 reply.opened(_ino, _flags)
             }
@@ -492,16 +519,26 @@ pub fn print_flags(tag: &str, flags: i32) {
 }
 
 pub fn mount(path: String) {
-    debug!("Mounting pgdbfs on path: {}", path);
+    let home = dirs::home_dir().unwrap();
+
+    let cfg_path = format!("{}/.pgdbfs/pgdbfs", home.to_str().unwrap());
+
+    let cfg: PgDbFsConfig = confy::load(&cfg_path).unwrap();
+    let cfg_clone = cfg.clone();
+
+    println!("{:?}", cfg);
+
+    info!("Mounting pgdbfs on path: {}", path);
+
     let mountpt = Path::new(&path);
-    //    let mut db_mgr = PgDbMgr::new(String::from("postgres://pgdbfs:pgdbfs@localhost/pgdbfs"));
-    let mut db_mgr = PgDbMgr::new(String::from("localhost"));
+    let mut db_mgr = PgDbMgr::new(cfg);
     db_mgr.init();
 
     let pgdbfs = PgDbFs {
         mount_pt: path.to_string(),
         db_mgr: db_mgr,
         fcache: fcache::FCache::new(),
+        cfg: cfg_clone,
     };
 
     let result = fuse::mount(pgdbfs, &mountpt, &[]);

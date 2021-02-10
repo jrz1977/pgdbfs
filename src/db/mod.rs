@@ -16,7 +16,7 @@ use self::chrono::{DateTime, Utc};
 
 use std::vec::Vec;
 
-use fcache;
+use fsys::PgDbFsConfig;
 
 pub struct Ent {
     pub id: i64,
@@ -36,26 +36,14 @@ pub struct EntData {
 
 #[derive(Debug)]
 pub struct PgDbMgr {
-    db_url: String,
+    cfg: PgDbFsConfig,
     pool: Option<r2d2::Pool<PostgresConnectionManager<NoTls>>>,
 }
 
-pub fn make_a_pool(db_url: String) -> r2d2::Pool<PostgresConnectionManager<NoTls>> {
-    //    let m = PostgresConnectionManager::new(db_url, TlsMode::None).unwrap();
-    let host = format!(
-        "host = {} user = {} dbname = {}",
-        db_url, "pgdbfs", "pgdbfs"
-    );
-    let m = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
-
-    let p = r2d2::Pool::new(m).unwrap();
-    return p;
-}
-
 impl PgDbMgr {
-    pub fn new(url: String) -> PgDbMgr {
+    pub fn new(cfg: PgDbFsConfig) -> PgDbMgr {
         PgDbMgr {
-            db_url: url,
+            cfg: cfg,
             pool: None,
         }
     }
@@ -63,11 +51,10 @@ impl PgDbMgr {
     pub fn init(&mut self) {
         let host = format!(
             "host = {} user = {} password = {} dbname = {}",
-            self.db_url, "pgdbfs", "pgdbfs", "pgdbfs"
+            self.cfg.db_host, self.cfg.db_user, self.cfg.db_pass, self.cfg.db_user
         );
         let cm = PostgresConnectionManager::new(host.parse().unwrap(), NoTls);
         debug!("Connecting to : {}", host);
-        //        let cm = PostgresConnectionManager::new(s, NoTls).unwrap();
         self.pool = Some(r2d2::Pool::new(cm).unwrap());
     }
 
@@ -96,10 +83,10 @@ impl PgDbMgr {
         }
     }
 
-    pub fn mkfile(&mut self, mnt_pt: &String, parent: i64, name: &str) {
+    pub fn mkfile(&mut self, mnt_pt: &String, parent: i64, name: &str, segment_len: &i32) {
         let sql = "insert into pgdbfs (id, mnt_pt, ino, parentid, name, size, segment_len, is_dir) values ((select nextval('fsid_seq')), $1, (select nextval('ino_seq')), $2, $3, 0, $4, false)";
         let mut conn = self.connect();
-        match conn.execute(sql, &[&mnt_pt, &parent, &name, &fcache::DEFAULT_BUFFER_SZ]) {
+        match conn.execute(sql, &[&mnt_pt, &parent, &name, segment_len]) {
             Result::Ok(val) => {
                 debug!("$$$ {:?}", val)
             }
@@ -347,5 +334,20 @@ impl PgDbMgr {
         debug!("delete_entity(file_id: {})", file_id);
 
         return updt_cnt;
+    }
+
+    pub fn get_file_sz(&mut self, file_id: &i64) -> i64 {
+        let mut conn = self.connect();
+
+        let sql = "select size from pgdbfs where id=$1";
+
+        let row_data = conn.query_one(sql, &[file_id]);
+        match row_data {
+            Ok(row) => {
+                let count: i64 = row.get("size");
+                return count;
+            }
+            Err(_err) => -1,
+        }
     }
 }
