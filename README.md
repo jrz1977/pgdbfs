@@ -25,9 +25,9 @@ db_pass = 'pgdbfs'
 db_segment_len = 1048576
 ```
 ### Setup mount point
-
-- mkdir -p $HOME/pgdbfs/my_storage
-
+```
+$ mkdir -p $HOME/pgdbfs/my_storage
+```
 ## Running the Filesystem
 ```
 $ RUST_LOG=info cargo run $HOME/pgdbfs/my_storage
