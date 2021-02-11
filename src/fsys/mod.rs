@@ -88,20 +88,17 @@ impl Filesystem for PgDbFs {
                 debug!("No value in name, parent: {}", parent);
                 return;
             }
-            Some(n) => {
-                match self.db_mgr.lookup(&self.mount_pt, parent as i64, n) {
-                    None => {
-                        debug!("No entries found for parent: {}, name: {:?}", parent, name);
-                        reply.error(ENOENT);
-                    }
-                    Some(ent) => {
-                        //                        let ts = time::now().to_timespec();
-                        let ttl = Timespec::new(1, 0);
-                        let attr = self.make_file_entry(&ent);
-                        reply.entry(&ttl, &attr, 0);
-                    }
+            Some(n) => match self.db_mgr.lookup(&self.mount_pt, parent as i64, n) {
+                None => {
+                    debug!("No entries found for parent: {}, name: {:?}", parent, name);
+                    reply.error(ENOENT);
                 }
-            }
+                Some(ent) => {
+                    let ttl = Timespec::new(1, 0);
+                    let attr = self.make_file_entry(&ent);
+                    reply.entry(&ttl, &attr, 0);
+                }
+            },
         }
     }
 
@@ -483,24 +480,31 @@ impl Filesystem for PgDbFs {
             "readdir(ino={}, fh={}, offset={}, mnt_pt: {})",
             ino, fh, offset, self.mount_pt
         );
-        let off = 0;
-        if offset == 0 {
-            let entries: Vec<db::Ent> = self.db_mgr.ls(self.mount_pt.to_string(), ino as i64);
-            reply.add(ino, off + 1, FileType::Directory, &Path::new("."));
-            reply.add(ino, off + 1, FileType::Directory, &Path::new(".."));
+        let mut off = offset;
+        let entries: Vec<db::Ent> = self
+            .db_mgr
+            .ls(self.mount_pt.to_string(), ino as i64, offset);
+        debug!(
+            "readdir(ino={}, fh={}, offset={}, mnt_pt: {}, num_files: {})",
+            ino,
+            fh,
+            offset,
+            self.mount_pt,
+            entries.len()
+        );
 
-            for e in entries {
-                reply.add(
-                    e.ino as u64,
-                    off + 1,
-                    if e.is_dir {
-                        FileType::Directory
-                    } else {
-                        FileType::RegularFile
-                    },
-                    &Path::new(&e.name),
-                );
-            }
+        for e in entries {
+            off += 1;
+            let v = reply.add(
+                e.ino as u64,
+                off,
+                if e.is_dir {
+                    FileType::Directory
+                } else {
+                    FileType::RegularFile
+                },
+                &Path::new(&e.name),
+            );
         }
         reply.ok();
     }
