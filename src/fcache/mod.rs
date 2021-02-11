@@ -214,7 +214,7 @@ impl FBuffer {
                     let file_sz = db.get_file_sz(&self.file_id);
 
                     if potential_offset >= file_sz {
-                        info!("offset exceeds file size, returning last segment");
+                        debug!("offset exceeds file size, returning last segment");
                         return self.segments.len() as i64 - 1;
                     }
                     panic!(
@@ -275,7 +275,7 @@ impl FCache {
         if self.fcache.contains_key(&key) {
             return self.fcache.get_mut(&key);
         }
-        info!("Cached file not found, looking up in db {}", ino);
+        debug!("Cached file not found, looking up in db {}", ino);
         match db.lookup_by_ino(mnt_pt, ino as i64) {
             None => {
                 debug!("No entries found for ino: {}", ino);
@@ -294,9 +294,9 @@ impl FCache {
     }
 
     pub fn init(&mut self, mnt_pt: &String, ino: i64, id: i64, flags: u32, segment_len: i32) {
-        info!("Caching file: mnt_pt: {}, ino: {})", mnt_pt, ino);
+        debug!("Caching file: mnt_pt: {}, ino: {})", mnt_pt, ino);
         let key = self.make_key(mnt_pt, &ino);
-        info!("Key = {}", key);
+        //info!("Key = {}", key);
         self.fcache
             .entry(key)
             .or_insert_with(|| FBuffer::new(id, segment_len, flags));
