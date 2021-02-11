@@ -343,7 +343,12 @@ impl Filesystem for PgDbFs {
     }
 
     fn open(&mut self, _req: &Request, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        debug!("open(io: {}, flags: {})", _ino, _flags);
+        debug!(
+            "open(ino: {}, flags: {}, req: {})",
+            _ino,
+            _flags,
+            _req.unique()
+        );
         print_flags(&"open", _flags as i32);
         match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
             None => {
@@ -363,7 +368,8 @@ impl Filesystem for PgDbFs {
                     self.db_mgr.clear_file_data(&ent.id);
                 }
 
-                self.fcache.init(ent.id, _flags, ent.segment_len);
+                self.fcache
+                    .init(&self.mount_pt, ent.ino, ent.id, _flags, ent.segment_len);
                 reply.opened(_ino, _flags)
             }
         }
@@ -387,18 +393,19 @@ impl Filesystem for PgDbFs {
             _size,
             _req.unique()
         );
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
+
+        match self
+            .fcache
+            .get_cached(&self.mount_pt, _ino as i64, 0, &mut self.db_mgr)
+        {
             None => {
-                debug!("No entries found for ino: {}", _ino);
-                reply.error(ENOENT);
+                error!("File not cached, ino: {}", _ino);
+                reply.error(ENOENT)
             }
-            Some(ent) => {
-                let fb_opt = self.fcache.get(&ent.id);
-                match fb_opt {
-                    Some(fb) => match fb.read(_offset, _size as i32, &mut self.db_mgr) {
-                        Some(data) => reply.data(data.as_slice()),
-                        None => reply.error(ENOENT),
-                    },
+            Some(fb) => {
+                debug!("Cache found, ino: {}", fb.file_id);
+                match fb.read(_offset, _size as i32, &mut self.db_mgr) {
+                    Some(data) => reply.data(data.as_slice()),
                     None => reply.error(ENOENT),
                 }
             }
@@ -425,23 +432,18 @@ impl Filesystem for PgDbFs {
 
         print_flags(&"write", _flags as i32);
 
-        match self.db_mgr.lookup_by_ino(&self.mount_pt, _ino as i64) {
+        match self
+            .fcache
+            .get_cached(&self.mount_pt, _ino as i64, _flags, &mut self.db_mgr)
+        {
             None => {
-                debug!("No entries found for ino: {}", _ino);
-                reply.error(ENOENT);
+                error!("File not cached, ino: {}", _ino);
+                reply.error(ENOENT)
             }
-            Some(ent) => {
-                self.fcache.init(ent.id, _flags, ent.segment_len);
-                let fb_opt = self.fcache.get(&ent.id);
-                match fb_opt {
-                    Some(fb) => {
-                        fb.add(_offset, _data, &mut self.db_mgr);
-                        return reply.written(_data.len() as u32);
-                    }
-                    None => {
-                        debug!("No sauce");
-                    }
-                }
+            Some(fb) => {
+                debug!("Cache found, ino: {}", fb.file_id);
+                fb.add(_offset, _data, &mut self.db_mgr);
+                return reply.written(_data.len() as u32);
             }
         }
     }
@@ -454,7 +456,7 @@ impl Filesystem for PgDbFs {
                 debug!("No entries found for ino: {}", _ino);
                 reply.error(ENOENT);
             }
-            Some(ent) => match self.fcache.remove(&ent.id) {
+            Some(ent) => match self.fcache.remove(&self.mount_pt, &ent.ino) {
                 Some(mut fb) => {
                     let flags_t: i32 = fb.flags as i32;
                     if flags_t & O_ACCMODE == O_RDWR || flags_t & O_ACCMODE == O_WRONLY {
@@ -495,7 +497,7 @@ impl Filesystem for PgDbFs {
 
         for e in entries {
             off += 1;
-            let v = reply.add(
+            reply.add(
                 e.ino as u64,
                 off,
                 if e.is_dir {
