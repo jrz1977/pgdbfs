@@ -184,12 +184,12 @@ impl PgDbMgr {
         }
     }
 
-    pub fn ls(&mut self, mnt_pt: String, ino: i64) -> Vec<Ent> {
+    pub fn ls(&mut self, mnt_pt: String, ino: i64, offset: i64) -> Vec<Ent> {
         let mut conn = self.connect();
         let mut v: Vec<Ent> = Vec::new();
-        debug!("ls: {}, {}", mnt_pt, ino);
-        for row in &conn.query("select id, name, is_dir, ino, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2", &[&mnt_pt, &ino]).unwrap() {
+        let sql = "select id, name, is_dir, ino, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 order by id offset $3 limit 100";
 
+        for row in &conn.query(sql, &[&mnt_pt, &ino, &offset]).unwrap() {
             let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
             let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
             let e = Ent {

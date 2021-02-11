@@ -1,6 +1,14 @@
 PostgreSQL Database as File System
 
-**pgdbfs** is a toy file system implemented in Rust using libfuse and PostgreSQL as backend storage.
+**pgdbfs** is a basic file system implemented in Rust using libfuse and PostgreSQL as backend storage.
+
+## Why
+
+- Small non trivial project to learn Rust
+- There may be a small subset of valid use cases to store files in DB
+  - Replication and HA is taken care of by DB replication
+  - Lots of small file operations
+ 
 
 ## Requirements
 - postgresql 10+
@@ -28,7 +36,8 @@ $ mkdir -p /tmp/my_storage
 
 - Create config file in $HOME/.pgdbfs/pgdbfs.toml
 
-```db_host = 'localhost'
+```
+db_host = 'localhost'
 db_user = 'pgdbfs'
 db_pass = 'pgdbfs'
 db_segment_len = 1048576
@@ -36,4 +45,11 @@ db_segment_len = 1048576
 ## Running the Filesystem
 ```
 $ RUST_LOG=info cargo run /tmp/my_storage
+```
+## Troubleshooting
+
+### Enable debug
+```
+export RUST_LOG="pgdbfs::fsys=debug,pgdbfs::db=debug,pgdbfs::fcache=debug"
+cargo run /tmp/my_storage
 ```
