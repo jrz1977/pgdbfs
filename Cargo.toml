@@ -1,7 +1,7 @@
 [package]
 name = "pgdbfs"
 version = "0.1.0"
-authors = ["riazmd"]
+authors = ["jrz1977"]
 
 [dependencies]
 #fuse = "0.3.1"
