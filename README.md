@@ -50,6 +50,20 @@ $ RUST_LOG=info cargo run /tmp/my_storage
 
 ### Enable debug
 ```
-export RUST_LOG="pgdbfs::fsys=debug,pgdbfs::db=debug,pgdbfs::fcache=debug"
-cargo run /tmp/my_storage
+$ export RUST_LOG="pgdbfs::fsys=debug,pgdbfs::db=debug,pgdbfs::fcache=debug"
+$ cargo run /tmp/my_storage
+```
+
+### Fails to start
+
+If it fails to start with the following error:
+
+```
+fuse: failed to open mountpoint for reading: Transport endpoint is not connected
+thread 'main' panicked at 'Box<Any>', src/fsys/mod.rs:556:13
+```
+Execute
+```
+$ cd $HOME
+$ fusermount -u /tmp/my_storage
 ```
