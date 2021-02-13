@@ -16,10 +16,17 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 2 {
+    if args.len() < 2 {
         println!("usage: cargo run [mount point]");
         std::process::exit(1);
     }
+
+    let home = dirs::home_dir().unwrap();
+    let mut cfg_path = format!("{}/.pgdbfs/pgdbfs", home.to_str().unwrap());
+    if args.len() == 3 {
+        cfg_path = String::from(&args[2]);
+    }
+    println!("Cfg file: {}", cfg_path);
 
     let mnt_pt = &args[1];
 
@@ -39,7 +46,7 @@ fn main() {
         })
         .expect("Error setting Ctrl-C handler");
 
-        fsys::mount(mnt_pt.to_string());
+        fsys::mount(mnt_pt.to_string(), cfg_path);
     } else {
         error!("Path: {} does not exist", mnt_pt);
     }

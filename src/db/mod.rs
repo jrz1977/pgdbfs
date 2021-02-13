@@ -27,6 +27,7 @@ pub struct Ent {
     pub segment_len: i32,
     pub create_ts: DateTime<Utc>,
     pub update_ts: DateTime<Utc>,
+    pub nlink: i64,
 }
 
 pub struct EntData {
@@ -130,22 +131,27 @@ impl PgDbMgr {
     ///
     pub fn lookup(&mut self, mnt_pt: &String, ino: i64, name: &str) -> Option<Ent> {
         let mut conn = self.connect();
-        let row_data = conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and parentid=$2 and name=$3",
-                               &[&mnt_pt, &ino, &name]);
+
+        let sql = "select p.*, (select count(*)::int8 from pgdbfs where parentid=p.ino and is_dir=true) as child_count from pgdbfs p where mnt_pt=$1 and parentid=$2 and name=$3";
+
+        info!("lookup(sql: {}", sql);
+
+        let row_data = conn.query_one(sql, &[&mnt_pt, &ino, &name]);
 
         match row_data {
             Ok(row) => {
                 let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
                 let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
                 let e = Ent {
-                    id: row.get(0),
-                    ino: row.get(1),
-                    name: row.get(2),
-                    is_dir: row.get(3),
-                    size: row.get(4),
-                    segment_len: row.get(5),
+                    id: row.get("id"),
+                    ino: row.get("ino"),
+                    name: row.get("name"),
+                    is_dir: row.get("is_dir"),
+                    size: row.get("size"),
+                    segment_len: row.get("segment_len"),
                     create_ts: c,
                     update_ts: u,
+                    nlink: row.get("child_count"),
                 };
                 Some(e)
             }
@@ -157,22 +163,30 @@ impl PgDbMgr {
     ///
     pub fn lookup_by_ino(&mut self, mnt_pt: &String, ino: i64) -> Option<Ent> {
         let mut conn = self.connect();
-        let row_data = &conn.query_one("select id, ino, name, is_dir, size, segment_len, create_ts, update_ts from pgdbfs where mnt_pt=$1 and ino=$2",
-                               &[&mnt_pt, &ino]);
+
+        let sql = "select p.*, (select count(*)::int8 from pgdbfs where parentid=p.ino and is_dir=true) as child_count from pgdbfs p where mnt_pt=$1 and ino=$2";
+
+        info!(
+            "lookup_by_ino(sql: {}, mnt_pt: {}, ino: {})",
+            sql, mnt_pt, ino
+        );
+
+        let row_data = &conn.query_one(sql, &[&mnt_pt, &ino]);
 
         match row_data {
             Ok(row) => {
                 let c: DateTime<chrono::offset::Utc> = row.get("create_ts");
                 let u: DateTime<chrono::offset::Utc> = row.get("update_ts");
                 let e = Ent {
-                    id: row.get(0),
-                    ino: row.get(1),
-                    name: row.get(2),
-                    is_dir: row.get(3),
-                    size: row.get(4),
-                    segment_len: row.get(5),
+                    id: row.get("id"),
+                    ino: row.get("ino"),
+                    name: row.get("name"),
+                    is_dir: row.get("is_dir"),
+                    size: row.get("size"),
+                    segment_len: row.get("segment_len"),
                     create_ts: c,
                     update_ts: u,
+                    nlink: row.get("child_count"),
                 };
                 debug!(
                     "lookup_by_ino(mnt: {}, ino: {}, id: {}, name: {}, sz: {}",
@@ -201,6 +215,7 @@ impl PgDbMgr {
                 segment_len: row.get(5),
                 create_ts: c,
                 update_ts: u,
+                nlink: 0,
             };
             v.push(e)
         }
@@ -303,6 +318,36 @@ impl PgDbMgr {
             Err(_err) => false,
         }
     }
+    /*
+    pub fn num_children(&mut self, file_id: &i64, children_type: Option<fuse::FileType>) -> bool {
+        let mut conn = self.connect();
+
+        let mut sql = "select count(*)::int as cnt from pgdbfs where parentid=$1";
+        let mut params = [];
+        match children_type {
+            None => (),
+            fuse::FileType::Directory => {
+                sql = "select count(*)::int as cnt from pgdbfs parentid=$1 and is_dir=true";
+            }
+            fuse::FileType::RegularFile => {
+                sql = "select count(*)::int as cnt from pgdbfs where parent_id=$1 and is_dir=false";
+            }
+        }
+
+        let row_data = conn.query_one(sql, &[file_id]);
+        match row_data {
+            Ok(row) => {
+                let count: i32 = row.get("cnt");
+                debug!("has_children(file_id: {}, cnt: {})", file_id, count);
+
+                if count == 0 {
+                    return false;
+                }
+                true
+            }
+            Err(_err) => false,
+        }
+    }*/
 
     pub fn update_parent(&mut self, file_id: &i64, parent_id: &i64) -> bool {
         let mut conn = self.connect();

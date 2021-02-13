@@ -14,7 +14,7 @@ use self::fuse::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyWrite, Request,
 };
-use self::libc::{EISDIR, ENOENT, ENOTDIR, ENOTEMPTY};
+use self::libc::{c_int, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY};
 use self::libc::{O_ACCMODE, O_APPEND, O_RDONLY, O_RDWR, O_WRONLY};
 use self::time::Timespec;
 use std::time::{Duration, UNIX_EPOCH};
@@ -52,12 +52,25 @@ pub struct PgDbFs {
 }
 
 pub trait DbFsUtils {
-    fn make_file_entry(&self, ent: &db::Ent) -> FileAttr {
+    fn calculate_num_blocks(&self, size: i64) -> u64 {
+        if size < 0 {
+            return 0;
+        }
+        let num = (size as f64 / 1024f64).ceil();
+        let rem = num as f64 % 4f64;
+        if rem == 0f64 {
+            num as u64
+        } else {
+            (num + 4f64 - rem) as u64
+        }
+    }
+
+    fn make_file_entry(&self, ent: &db::Ent, req: &Request) -> FileAttr {
+        let blocks = self.calculate_num_blocks(ent.size) * 2;
         let attr = FileAttr {
             ino: ent.ino as u64,
             size: ent.size as u64,
-            blocks: 0,
-            //            atime: ent.create_ts,
+            blocks: blocks,
             atime: Timespec::new(ent.create_ts.timestamp(), 0),
             mtime: Timespec::new(ent.update_ts.timestamp(), 0),
             ctime: Timespec::new(ent.update_ts.timestamp(), 0),
@@ -68,9 +81,9 @@ pub trait DbFsUtils {
                 FileType::RegularFile
             },
             perm: 0o644,
-            nlink: 0,
-            uid: 0,
-            gid: 0,
+            nlink: if ent.is_dir { 2 + ent.nlink as u32 } else { 1 },
+            uid: req.uid(),
+            gid: req.gid(),
             rdev: 0,
             flags: 0,
         };
@@ -81,6 +94,11 @@ pub trait DbFsUtils {
 impl DbFsUtils for PgDbFs {}
 
 impl Filesystem for PgDbFs {
+    fn init(&mut self, _req: &Request) -> Result<(), c_int> {
+        debug!("init({:?}", _req);
+        Ok(())
+    }
+
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup(parent={}, name={:?})", parent, name.to_str());
         match name.to_str() {
@@ -95,7 +113,7 @@ impl Filesystem for PgDbFs {
                 }
                 Some(ent) => {
                     let ttl = Timespec::new(1, 0);
-                    let attr = self.make_file_entry(&ent);
+                    let attr = self.make_file_entry(&ent, _req);
                     reply.entry(&ttl, &attr, 0);
                 }
             },
@@ -110,7 +128,7 @@ impl Filesystem for PgDbFs {
                 debug!("No entries found for ino: {}", ino);
             }
             Some(ent) => {
-                let attr = self.make_file_entry(&ent);
+                let attr = self.make_file_entry(&ent, _req);
                 let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
                 //                reply.attr(&ent.create_ts, &attr);
                 reply.attr(&ts, &attr);
@@ -172,7 +190,7 @@ impl Filesystem for PgDbFs {
                     updt_count, self.mount_pt, _ino
                 );
 
-                let attr = self.make_file_entry(&ent);
+                let attr = self.make_file_entry(&ent, _req);
 
                 reply.attr(&attr.ctime, &attr);
             }
@@ -208,7 +226,7 @@ impl Filesystem for PgDbFs {
         {
             None => panic!("Failed to lookup created dir"),
             Some(ent) => {
-                let attr = self.make_file_entry(&ent);
+                let attr = self.make_file_entry(&ent, _req);
                 let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
                 reply.entry(&ts, &attr, 0);
             }
@@ -232,7 +250,7 @@ impl Filesystem for PgDbFs {
         {
             None => panic!("Failed to lookup created dir"),
             Some(ent) => {
-                let attr = self.make_file_entry(&ent);
+                let attr = self.make_file_entry(&ent, _req);
                 let ts: Timespec = Timespec::new(ent.create_ts.timestamp(), 0);
                 reply.entry(&ts, &attr, 0);
             }
@@ -479,8 +497,12 @@ impl Filesystem for PgDbFs {
         mut reply: ReplyDirectory,
     ) {
         debug!(
-            "readdir(ino={}, fh={}, offset={}, mnt_pt: {})",
-            ino, fh, offset, self.mount_pt
+            "readdir(ino={}, fh={}, offset={}, mnt_pt: {}, uid: {})",
+            ino,
+            fh,
+            offset,
+            self.mount_pt,
+            _req.uid()
         );
         let mut off = offset;
         let entries: Vec<db::Ent> = self
@@ -497,7 +519,7 @@ impl Filesystem for PgDbFs {
 
         for e in entries {
             off += 1;
-            reply.add(
+            let fill = reply.add(
                 e.ino as u64,
                 off,
                 if e.is_dir {
@@ -507,6 +529,9 @@ impl Filesystem for PgDbFs {
                 },
                 &Path::new(&e.name),
             );
+            if fill {
+                break;
+            }
         }
         reply.ok();
     }
@@ -524,11 +549,7 @@ pub fn print_flags(tag: &str, flags: i32) {
     );
 }
 
-pub fn mount(path: String) {
-    let home = dirs::home_dir().unwrap();
-
-    let cfg_path = format!("{}/.pgdbfs/pgdbfs", home.to_str().unwrap());
-
+pub fn mount(path: String, cfg_path: String) {
     let cfg: PgDbFsConfig = confy::load(&cfg_path).unwrap();
     let cfg_clone = cfg.clone();
 
