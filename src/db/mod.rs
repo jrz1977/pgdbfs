@@ -134,7 +134,7 @@ impl PgDbMgr {
 
         let sql = "select p.*, (select count(*)::int8 from pgdbfs where parentid=p.ino and is_dir=true) as child_count from pgdbfs p where mnt_pt=$1 and parentid=$2 and name=$3";
 
-        info!("lookup(sql: {}", sql);
+        debug!("lookup(sql: {}", sql);
 
         let row_data = conn.query_one(sql, &[&mnt_pt, &ino, &name]);
 
@@ -166,7 +166,7 @@ impl PgDbMgr {
 
         let sql = "select p.*, (select count(*)::int8 from pgdbfs where parentid=p.ino and is_dir=true) as child_count from pgdbfs p where mnt_pt=$1 and ino=$2";
 
-        info!(
+        debug!(
             "lookup_by_ino(sql: {}, mnt_pt: {}, ino: {})",
             sql, mnt_pt, ino
         );

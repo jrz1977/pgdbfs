@@ -553,9 +553,7 @@ pub fn mount(path: String, cfg_path: String) {
     let cfg: PgDbFsConfig = confy::load(&cfg_path).unwrap();
     let cfg_clone = cfg.clone();
 
-    println!("{:?}", cfg);
-
-    info!("Mounting pgdbfs on path: {}", path);
+    info!("Mounting pgdbfs on path: {}, config: {}", path, cfg_path);
 
     let mountpt = Path::new(&path);
     let mut db_mgr = PgDbMgr::new(cfg);
