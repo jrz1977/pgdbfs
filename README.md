@@ -44,14 +44,14 @@ db_segment_len = 1048576
 ```
 ## Running the Filesystem
 ```
-$ RUST_LOG=info cargo run /tmp/my_storage
+$ RUST_LOG=info cargo run -- -m /tmp/my_storage -f ~/.pgdbfs/pgdbfs.toml
 ```
 ## Troubleshooting
 
 ### Enable debug
 ```
 $ export RUST_LOG="pgdbfs::fsys=debug,pgdbfs::db=debug,pgdbfs::fcache=debug"
-$ cargo run /tmp/my_storage
+$ cargo run -- -m /tmp/my_storage -f ~/.pgdbfs/pgdbfs.toml
 ```
 
 ### Fails to start
