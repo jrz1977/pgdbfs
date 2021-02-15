@@ -225,19 +225,26 @@ impl PgDbMgr {
 
     pub fn load_segment(&mut self, file_id: &i64, segment_no: &i64) -> Option<Vec<u8>> {
         let mut conn = self.connect();
-        let sql = "select data from pgdbfs_data where fsid=$1 and segment_no=$2";
+        let sql = "select m.id, m.size, m.is_dir, d.data, d.segment_no from pgdbfs m left join 
+                (select data, fsid, segment_no from pgdbfs_data where fsid=$1 and segment_no=$2) d 
+                on m.id=d.fsid where m.id=$1";
+
         debug!(
-            "load_segment(file_id: {}, segment_no: {})",
-            file_id, segment_no
+            "load_segment(file_id: {}, segment_no: {}, sql: {})",
+            file_id, segment_no, sql
         );
         let row_data = conn.query_one(sql, &[file_id, segment_no]);
         match row_data {
             Ok(row) => {
-                debug!("Row found...");
-                Some(row.get("data"))
+                let sz: i64 = row.get("size");
+                if sz == 0 {
+                    Some(Vec::new())
+                } else {
+                    Some(row.get("data"))
+                }
             }
             Err(_err) => {
-                debug!("No row found...");
+                error!("Failed sql {}", _err);
                 None
             }
         }
