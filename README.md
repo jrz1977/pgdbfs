@@ -4,11 +4,12 @@ PostgreSQL Database as File System
 
 ## Why
 
-- Small non trivial project to learn Rust
-- There may be a small subset of valid use cases to store files in DB
+In general, storing files in DB is a bad idea, but there may be a small subset of valid use cases to store files in DB
+
   - Replication and HA is taken care of by DB replication
   - Lots of small file operations
- 
+  - Files are infrequently read or accessed
+  - DB Backups automatically include files
 
 ## Requirements
 - postgresql 10+
