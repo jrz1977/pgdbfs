@@ -2,8 +2,6 @@ PostgreSQL Database as File System
 
 **pgdbfs** is a basic file system implemented in Rust using libfuse and PostgreSQL as backend storage. Manage files in databas using familiar Linux directory and file manipulation commands and utilities.
 
-Discuss on [Discord](https://discord.gg/MabDDFDU)
-
 ## Why
 
 Please read through PostgreSQL wiki to understand the benefits and tradeoffs of storing files in Database. [https://wiki.postgresql.org/wiki/BinaryFilesInDB](https://wiki.postgresql.org/wiki/BinaryFilesInDB)
@@ -72,3 +70,5 @@ Execute
 $ cd $HOME
 $ fusermount -u /tmp/my_storage
 ```
+
+Discuss on [Discord](https://discord.gg/MabDDFDU)
