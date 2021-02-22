@@ -71,4 +71,4 @@ $ cd $HOME
 $ fusermount -u /tmp/my_storage
 ```
 
-Discuss on [Discord](https://discord.gg/MabDDFDU)
+Discuss on [Discord](https://discord.gg/KbmpmvVETF)
