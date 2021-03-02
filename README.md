@@ -8,6 +8,7 @@ Please read through PostgreSQL wiki to understand the benefits and tradeoffs of 
 
 There is a small subset of valid use cases to store files in DB
 
+  - Simple central and distributed file based configuration for services
   - Replication and HA is taken care of by DB replication
   - Lots of small file operations
   - Files are infrequently read or accessed
